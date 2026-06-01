@@ -1,0 +1,5 @@
+# Track only Python analysis scripts.
+# Everything else (data, figures, logs, subfolders) is ignored.
+*
+!.gitignore
+!*.py
