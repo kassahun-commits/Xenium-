@@ -102,6 +102,40 @@ LABEL_MAP = {
 GROUP_ORDER = ['H2O_veh', 'H2O_MCT1i', 'EtOH_veh', 'EtOH_MCT1i',
                'ChronicEtOH', 'MAT2A_CM', 'MAT2A_OE']
 
+# Marker gene sets for cell typing (verbatim from slideB_alcohol_prelim.py so
+# nucleus-only typing uses the identical rule as the whole-cell pipeline).
+MARKERS = {
+    'Neuron':          ['Rbfox3', 'Snap25', 'Syn1', 'Syt1', 'Stmn2', 'Map2', 'Tubb3'],
+    'Astrocyte':       ['Gfap', 'Aqp4', 'Slc1a3', 'Aldh1l1', 'S100b', 'Aldoc', 'Gja1'],
+    'Oligodendrocyte': ['Mog', 'Olig1', 'Olig2', 'Sox10'],
+    'Microglia':       ['Cx3cr1', 'Tmem119', 'Csf1r', 'Aif1', 'Trem2'],
+}
+
+
+def assign_cell_types(adata) -> None:
+    """Marker-based cell typing on log-normalized data (adds obs['celltype']).
+
+    For each lineage, score_genes gives a per-cell enrichment of its marker set
+    vs. a random background; each cell takes the highest-scoring lineage, or
+    'Unclassified' if no lineage scores > 0. Identical logic to the whole-cell
+    pipeline (slideB_alcohol_prelim.py).
+    """
+    score_cols = []
+    for ct, gs in MARKERS.items():
+        present = [g for g in gs if g in adata.var_names]
+        if not present:
+            logging.warning('No markers found for %s', ct)
+            continue
+        sc.tl.score_genes(adata, gene_list=present, score_name=f'score_{ct}',
+                          random_state=0, n_bins=25)
+        score_cols.append(f'score_{ct}')
+        logging.info('  scored %s: used %d/%d markers', ct, len(present), len(gs))
+    scores = adata.obs[score_cols]
+    best = scores.idxmax(axis=1).str.replace('score_', '', regex=False)
+    best[scores.max(axis=1) <= 0] = 'Unclassified'
+    adata.obs['celltype'] = pd.Categorical(
+        best, categories=list(MARKERS.keys()) + ['Unclassified'])
+
 
 # ---------------------------------------------------------------------------
 
@@ -362,10 +396,23 @@ def main() -> int:
     sc.pp.normalize_total(adata, target_sum=args.norm_target)
     sc.pp.log1p(adata)
 
+    # ---- Cell typing (marker-based, same rule as whole-cell pipeline) ----
+    logging.info('Assigning cell types from markers ...')
+    assign_cell_types(adata)
+    logging.info('Cell-type counts:\n%s',
+                 adata.obs['celltype'].value_counts().to_string())
+
     # ---- Outputs ----
     h5 = out_dir / f'{L}_combined_{D}.h5ad'
     adata.write_h5ad(h5)
     logging.info('Wrote %s', h5)
+
+    # Cell-type composition per sample (source data)
+    ct_counts = (adata.obs.groupby(['slide', 'group', 'replicate'], observed=True)
+                 ['celltype'].value_counts().unstack(fill_value=0).reset_index())
+    ct_csv = out_dir / f'{L}_celltype_counts_per_sample_{D}.csv'
+    ct_counts.to_csv(ct_csv, index=False)
+    logging.info('Wrote %s', ct_csv)
 
     cell_csv = out_dir / f'{L}_combined_cells_with_roi_{D}.csv'
     obs_out = adata.obs.copy()
