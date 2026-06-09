@@ -248,6 +248,16 @@ def fig_sig_bar_nucleus(pb_csv, wx_csv, out_png):
     plt.close(fig)
 
 
+def render_pdf_png(pdf, out_png, dpi=200):
+    """Rasterize the first page of a vector PDF figure to PNG (for embedding in
+    the deck, which can't take PDF directly). Uses PyMuPDF."""
+    import fitz
+    doc = fitz.open(str(pdf))
+    pix = doc[0].get_pixmap(matrix=fitz.Matrix(dpi / 72, dpi / 72))
+    pix.save(str(out_png))
+    doc.close()
+
+
 def export_bar_genes_xlsx(v1_pb_csv, v1_wx_csv, nuc_pb_csv, nuc_wx_csv,
                           out_xlsx):
     """Source data for the two bar-chart slides: every gene counted in each bar,
@@ -528,6 +538,12 @@ def main():
                          '(adds a nucleus version of the sig-bar slide)')
     ap.add_argument('--nuc-wx-csv', default=None,
                     help='optional: nucleus-only Wilcoxon DE results CSV')
+    ap.add_argument('--umap-pdf', default=None,
+                    help='optional: leiden UMAP PDF (WholeCell_V1_10x_UMAP_'
+                         'leiden_slide) for the "how leiden worked" slide')
+    ap.add_argument('--spatial-pdf', default=None,
+                    help='optional: leiden spatial-cluster PDF '
+                         '(WholeCell_V1_10x_spatial_clusters)')
     ap.add_argument('--date', default='2026-06-09')
     args = ap.parse_args()
 
@@ -542,6 +558,15 @@ def main():
     fig_sig_bar(args.pb_csv, args.wx_csv, sig_png)
     print('[fig] underpowered-vs-null diagnostic...')
     fig_diagnostic(args.pb_csv, args.wx_csv, diag_png)
+
+    leiden_umap_png = leiden_spatial_png = None
+    if (args.umap_pdf and args.spatial_pdf and Path(args.umap_pdf).exists()
+            and Path(args.spatial_pdf).exists()):
+        leiden_umap_png = assets / 'leiden_umap.png'
+        leiden_spatial_png = assets / 'leiden_spatial.png'
+        print('[fig] rendering leiden UMAP + spatial maps from PDF...')
+        render_pdf_png(args.umap_pdf, leiden_umap_png)
+        render_pdf_png(args.spatial_pdf, leiden_spatial_png)
 
     nuc_sig_png = None
     if args.nuc_pb_csv and args.nuc_wx_csv:
@@ -709,6 +734,83 @@ def main():
         'graphclust). Expression always comes from cell_feature_matrix.h5.',
         size=15, color=AMBER, bold=True)
 
+    # ---- Slide 4d: two ways to cell type ----
+    s = add_blank(prs)
+    slide_header(s, prs, 'Two ways to assign cell types',
+                 'Both label the same cells — one leans on an annotated '
+                 'reference, the other on known marker genes',
+                 tag='Choice: cell typing', tag_color=SLATE)
+    chip(s, 0.55, 1.55, 5.95, 0.55, '1.  Reference mapping (label transfer)',
+         PURPLE, size=14)
+    bullets(s, 0.6, 2.3, 6.0, 4.2, [
+        (0, 'Start from an ALREADY-annotated reference dataset (an atlas).',
+            NAVY, True),
+        (0, 'Project your cells into a shared space; each cell inherits the '
+            'label of the reference cells it most resembles.', NAVY),
+        (0, 'Tools: Azimuth, Seurat TransferData, scANVI / scArches, '
+            'scanpy ingest.', GRAY),
+        (0, 'Pros: automated, consistent with the reference taxonomy, good for '
+            'fine subtypes.', NAVY),
+        (0, 'Needs: a high-quality reference matching your tissue, species '
+            'and platform.', GRAY),
+    ], size=14)
+    chip(s, 6.85, 1.55, 5.95, 0.55, '2.  Marker gene annotation', BLUE, size=14)
+    bullets(s, 6.9, 2.3, 5.95, 4.2, [
+        (0, 'Use known marker genes to decide identity — NO reference needed.',
+            NAVY, True),
+        (0, 'Cluster-then-label: cluster cells (leiden), read each cluster\'s '
+            'top markers, name it.', NAVY),
+        (1, '← the 10x / leiden run did this', BLUE, True),
+        (0, 'Per-cell scoring: score every cell against marker sets, take the '
+            'highest (score_genes → argmax).', NAVY),
+        (1, '← the V1 DE pipeline did this', GREEN, True),
+        (0, 'Pros: transparent, works without a matching reference. '
+            'Needs: curated marker lists + human judgement.', GRAY),
+    ], size=14)
+    txt(s, 0.55, 6.45, 12.3, 0.95,
+        'Both pipelines here used marker gene annotation — neither did reference '
+        'mapping. V1 scored each cell on canonical markers; the 10x run clustered '
+        'with leiden first, then labelled each cluster. Same family, two styles — '
+        'which is exactly why their DE results line up so closely.',
+        size=13, color=AMBER, bold=True)
+
+    # ---- Slide 4e: how the leiden clustering worked ----
+    s = add_blank(prs)
+    slide_header(s, prs, 'How the leiden clustering worked',
+                 'From the expression matrix to 19 spatial clusters — the '
+                 'unsupervised recipe behind the 10x run',
+                 tag='Whole-cell · leiden', tag_color=TEAL)
+    chip(s, 0.5, 1.4, 4.35, 0.5, 'The recipe (no labels used)', PURPLE, size=13)
+    bullets(s, 0.55, 2.0, 4.4, 3.3, [
+        (0, 'Normalize + log; keep the 2,000 most variable genes.', NAVY),
+        (0, 'PCA → top 30 components (denoise).', NAVY),
+        (0, 'Build a k-nearest-neighbour graph — link each cell to the cells '
+            'most similar to it.', NAVY),
+        (0, 'Leiden finds densely-connected COMMUNITIES in that graph → '
+            '19 clusters (resolution 0.5).', NAVY, True),
+        (0, 'UMAP = a 2-D picture of the same graph, for viewing only — it is '
+            'NOT what does the clustering.', GRAY),
+        (0, 'Map each cluster back onto the cell\'s (x, y) → the tissue view.',
+            NAVY),
+    ], size=12.5)
+    txt(s, 0.55, 5.55, 4.4, 1.6,
+        'Leiden returns 19 anonymous clusters — colours, not names. Turning '
+        'those colours into cell types is the SEPARATE step on the next slide. '
+        'Raise the resolution → more clusters; same recipe.',
+        size=12, color=AMBER, bold=True)
+    txt(s, 5.05, 1.2, 7.95, 0.3,
+        'UMAP — every cell placed by expression; colour = leiden cluster (left), '
+        'slide (right)', size=10.5, bold=True, color=NAVY)
+    if leiden_umap_png and leiden_umap_png.exists():
+        s.shapes.add_picture(str(leiden_umap_png), Inches(5.05), Inches(1.5),
+                             width=Inches(7.95))
+    txt(s, 5.05, 3.95, 7.95, 0.3,
+        'The same clusters mapped back onto each tissue section',
+        size=10.5, bold=True, color=NAVY)
+    if leiden_spatial_png and leiden_spatial_png.exists():
+        s.shapes.add_picture(str(leiden_spatial_png), Inches(6.35), Inches(4.25),
+                             width=Inches(4.9))
+
     # ---- Slide 4c: cell typing (cluster -> cell-type name) ----
     s = add_blank(prs)
     slide_header(s, prs, 'Cell typing: putting names on the clusters',
@@ -761,46 +863,6 @@ def main():
         'are interpretation, not output — always sanity-check against an atlas '
         'or an expert, and confirm a cluster isn\'t just one mouse or one slide.',
         size=12.5, color=AMBER, bold=True)
-
-    # ---- Slide 4d: two ways to cell type ----
-    s = add_blank(prs)
-    slide_header(s, prs, 'Two ways to assign cell types',
-                 'Both label the same cells — one leans on an annotated '
-                 'reference, the other on known marker genes',
-                 tag='Choice: cell typing', tag_color=SLATE)
-    chip(s, 0.55, 1.55, 5.95, 0.55, '1.  Reference mapping (label transfer)',
-         PURPLE, size=14)
-    bullets(s, 0.6, 2.3, 6.0, 4.2, [
-        (0, 'Start from an ALREADY-annotated reference dataset (an atlas).',
-            NAVY, True),
-        (0, 'Project your cells into a shared space; each cell inherits the '
-            'label of the reference cells it most resembles.', NAVY),
-        (0, 'Tools: Azimuth, Seurat TransferData, scANVI / scArches, '
-            'scanpy ingest.', GRAY),
-        (0, 'Pros: automated, consistent with the reference taxonomy, good for '
-            'fine subtypes.', NAVY),
-        (0, 'Needs: a high-quality reference matching your tissue, species '
-            'and platform.', GRAY),
-    ], size=14)
-    chip(s, 6.85, 1.55, 5.95, 0.55, '2.  Marker gene annotation', BLUE, size=14)
-    bullets(s, 6.9, 2.3, 5.95, 4.2, [
-        (0, 'Use known marker genes to decide identity — NO reference needed.',
-            NAVY, True),
-        (0, 'Cluster-then-label: cluster cells (leiden), read each cluster\'s '
-            'top markers, name it.', NAVY),
-        (1, '← the 10x / leiden run did this', BLUE, True),
-        (0, 'Per-cell scoring: score every cell against marker sets, take the '
-            'highest (score_genes → argmax).', NAVY),
-        (1, '← the V1 DE pipeline did this', GREEN, True),
-        (0, 'Pros: transparent, works without a matching reference. '
-            'Needs: curated marker lists + human judgement.', GRAY),
-    ], size=14)
-    txt(s, 0.55, 6.45, 12.3, 0.95,
-        'Both pipelines here used marker gene annotation — neither did reference '
-        'mapping. V1 scored each cell on canonical markers; the 10x run clustered '
-        'with leiden first, then labelled each cluster. Same family, two styles — '
-        'which is exactly why their DE results line up so closely.',
-        size=13, color=AMBER, bold=True)
 
     # ---- Slide 4b: spatial neighborhood / niche analysis ----
     s = add_blank(prs)
