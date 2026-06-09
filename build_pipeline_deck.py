@@ -435,6 +435,33 @@ def main():
         'graphclust). Expression always comes from cell_feature_matrix.h5.',
         size=15, color=AMBER, bold=True)
 
+    # ---- Slide 4b: spatial neighborhood / niche analysis ----
+    s = add_blank(prs)
+    slide_header(s, prs, 'Spatial neighborhood / niche analysis',
+                 'Which cells sit near a given cell type — and what recurrent '
+                 'microenvironments exist')
+    chip(s, 0.55, 1.6, 5.9, 0.55, 'Questions you can ask', PURPLE, size=14)
+    bullets(s, 0.6, 2.3, 6.0, 4.2, [
+        (0, 'Is cell type A enriched right next to cell type B?', NAVY),
+        (0, 'What is the cell-type mix surrounding each astrocyte (or neuron)?', NAVY),
+        (0, 'Do neurons NEAR astrocytes express different genes than neurons far away?', NAVY),
+        (0, 'What recurrent tissue "niches" exist across the section?', NAVY),
+    ], size=15)
+    chip(s, 6.85, 1.6, 5.95, 0.55, 'How it is done (the recipe)', BLUE, size=14)
+    bullets(s, 6.9, 2.3, 5.95, 4.2, [
+        (0, 'Inputs we ALREADY have: cell centroids (x,y) + cell-type labels.', NAVY, True),
+        (0, 'Build a spatial neighbor graph:', NAVY),
+        (1, 'k-nearest neighbours (k ≈ 6–20), or', GRAY),
+        (1, 'all cells within a fixed radius (≈ 30–50 µm)', GRAY),
+        (0, 'Enrichment: permutation test — observed vs random adjacency.', NAVY),
+        (0, 'Niches: summarise each cell\'s neighbour composition → cluster.', NAVY),
+    ], size=15)
+    txt(s, 0.55, 6.35, 12.2, 1.0,
+        '10x ships no niche tool onboard — use Squidpy (Python; runs on our AnnData '
+        'object) or Seurat BuildNicheAssay (R). Caveat: build the graph PER SECTION '
+        '(never link cells across slides), and coordinates are in microns.',
+        size=14, color=AMBER, bold=True)
+
     # ---- Slide 5: Wilcoxon vs pseudobulk (why each) ----
     s = add_blank(prs)
     slide_header(s, prs, 'Two ways to test differential expression',
