@@ -370,47 +370,53 @@ def main():
         'files and the questions; the pipeline builds the rest.',
         size=16, color=NAVY)
 
-    # ---- Slide 3: downstream QC (analyst's job) ----
+    # ---- Slide 3: downstream QC, side-by-side (DE pipeline vs 10x workshop) ----
     s = add_blank(prs)
-    slide_header(s, prs, 'Downstream QC — the steps left to you',
-                 'The instrument already filtered transcript quality (QV>=20). '
-                 'These are what you (or Claude) still need to do.')
+    slide_header(s, prs, 'Downstream QC: the DE pipeline vs the 10x workshop',
+                 'Both run AFTER the instrument\'s QV>=20 transcript filter — '
+                 'same raw data, different goals, different cutoffs.')
     rows = [
-        ('Downstream QC step', 'Brain-tissue starting point', 'Why / how to set it'),
-        ('Low-count cells', 'counts/cell >= ~10',
-         'Drop empty / debris segmentations. Keep permissive — small glia '
-         '(microglia) are genuinely low-count.'),
-        ('Low-gene cells', 'genes/cell >= ~5',
-         'Removes near-empty cells with almost nothing detected.'),
-        ('Rare genes', 'gene in >= 5 cells',
-         'Drops genes seen in almost no cells (unstable, mostly noise).'),
-        ('Doublets / over-segmentation', 'flag very high counts or large area',
-         'Dense brain + neuropil merges neighbouring cells into one segment.'),
-        ('Cell-area outliers', 'drop implausibly tiny / huge cells',
-         'Catches segmentation errors common in tightly packed tissue.'),
-        ('Negative-control rate', 'check probe + codeword rate (per sample)',
-         'Estimates ambient false-positive level. No fixed cutoff — compare across samples.'),
+        ('QC / processing step', 'V1 DE pipeline  (made the data)',
+         '10x workshop pipeline  (just run)'),
+        ('Min counts per cell', '>= 10', '>= 20'),
+        ('Max counts per cell', 'none', '<= 98th percentile  (= 3,405)'),
+        ('Min cells per gene', '>= 5', '>= 100'),
+        ('Normalize', 'total -> 1e4, then log1p', 'total -> median, then log1p'),
+        ('Highly-variable genes', 'not used — keep all genes',
+         '2,000 (seurat_v3)'),
+        ('Scaling', 'none', 'z-score, capped at 10'),
+        ('Cell identity', 'score canonical markers -> label',
+         'leiden clusters (unsupervised)'),
+        ('Extra filters', 'pseudobulk gene >= 10 counts; replicate >= 25 cells',
+         '—'),
+        ('Result', '~214,744 cells · all 5,104 genes',
+         '210,391 cells · 4,679 genes'),
     ]
-    gt = s.shapes.add_table(len(rows), 3, Inches(0.5), Inches(1.5),
-                            Inches(12.3), Inches(4.1)).table
-    gt.columns[0].width = Inches(3.4)
-    gt.columns[1].width = Inches(3.1)
-    gt.columns[2].width = Inches(5.8)
+    gt = s.shapes.add_table(len(rows), 3, Inches(0.5), Inches(1.55),
+                            Inches(12.3), Inches(4.45)).table
+    gt.columns[0].width = Inches(3.0)
+    gt.columns[1].width = Inches(4.65)
+    gt.columns[2].width = Inches(4.65)
     for i in range(len(rows)):
         for j in range(3):
             gt.cell(i, j).text = rows[i][j]
-    style_table(gt, header_size=14, body_size=12.5)
+    style_table(gt, header_size=12.5, body_size=12)
+    # colour the two pipeline columns to match the rest of the deck
     for i in range(1, len(rows)):
         for p in gt.cell(i, 1).text_frame.paragraphs:
             for r in p.runs:
+                r.font.color.rgb = PURPLE
                 r.font.bold = True
-                r.font.color.rgb = BLUE
-    txt(s, 0.5, 5.8, 12.3, 1.4,
-        'None of these are fixed 10x numbers — 10x says plot each distribution and set '
-        'cutoffs from the data (e.g. 3-5x MAD from the median), starting permissive and '
-        'keeping them identical across samples. Do it in Python (prompt Claude / scanpy) '
-        'or yourself in R (Seurat / Bioconductor).',
-        size=14, color=NAVY)
+        for p in gt.cell(i, 2).text_frame.paragraphs:
+            for r in p.runs:
+                r.font.color.rgb = GREEN
+                r.font.bold = True
+    txt(s, 0.5, 6.2, 12.3, 1.2,
+        'Different goals, different cutoffs. DE counts molecules per mouse, so QC stays '
+        'permissive — keep every real cell and gene. Clustering hunts for structure, so it '
+        'trims harder, keeps only the 2,000 most variable genes, and scales. Neither set is '
+        '"the" 10x number: 10x says set cell/gene cutoffs from each dataset\'s own distributions.',
+        size=13, color=NAVY)
 
     # ---- Slide 4: filter by cluster ----
     s = add_blank(prs)
