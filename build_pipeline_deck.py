@@ -367,42 +367,47 @@ def main():
         'files and the questions; the pipeline builds the rest.',
         size=16, color=NAVY)
 
-    # ---- Slide 3: QC parameters ----
+    # ---- Slide 3: downstream QC (analyst's job) ----
     s = add_blank(prs)
-    slide_header(s, prs, 'QC: what to have Claude check, and why',
-                 'Recommended thresholds — confirm per dataset')
+    slide_header(s, prs, 'Downstream QC — the steps left to you',
+                 'The instrument already filtered transcript quality (QV>=20). '
+                 'These are what you (or Claude) still need to do.')
     rows = [
-        ('Parameter', 'Threshold', 'What it means / why'),
-        ('QV (transcript quality)', '≥ 20',
-         'Phred decode confidence; 20 = 99% accurate. Matches 10x default.'),
-        ('Counts per cell', '≥ 10',
-         'Removes empty droplets / segmentation debris with too few molecules.'),
-        ('Cells per gene', '≥ 5',
-         'Removes genes seen in almost no cells (unstable, mostly noise).'),
-        ('Negative-control probes', 'monitor rate',
-         'Built-in blank probes estimate the ambient false-positive level.'),
-        ('Compartment', 'choose',
-         'Whole-cell (nucleus+cytoplasm) vs nucleus-only — pick per question.'),
+        ('Downstream QC step', 'Brain-tissue starting point', 'Why / how to set it'),
+        ('Low-count cells', 'counts/cell >= ~10',
+         'Drop empty / debris segmentations. Keep permissive — small glia '
+         '(microglia) are genuinely low-count.'),
+        ('Low-gene cells', 'genes/cell >= ~5',
+         'Removes near-empty cells with almost nothing detected.'),
+        ('Rare genes', 'gene in >= 5 cells',
+         'Drops genes seen in almost no cells (unstable, mostly noise).'),
+        ('Doublets / over-segmentation', 'flag very high counts or large area',
+         'Dense brain + neuropil merges neighbouring cells into one segment.'),
+        ('Cell-area outliers', 'drop implausibly tiny / huge cells',
+         'Catches segmentation errors common in tightly packed tissue.'),
+        ('Negative-control rate', 'check probe + codeword rate (per sample)',
+         'Estimates ambient false-positive level. No fixed cutoff — compare across samples.'),
     ]
-    gt = s.shapes.add_table(len(rows), 3, Inches(0.5), Inches(1.45),
-                            Inches(12.3), Inches(4.0)).table
-    gt.columns[0].width = Inches(3.3)
-    gt.columns[1].width = Inches(2.0)
-    gt.columns[2].width = Inches(7.0)
+    gt = s.shapes.add_table(len(rows), 3, Inches(0.5), Inches(1.5),
+                            Inches(12.3), Inches(4.1)).table
+    gt.columns[0].width = Inches(3.4)
+    gt.columns[1].width = Inches(3.1)
+    gt.columns[2].width = Inches(5.8)
     for i in range(len(rows)):
         for j in range(3):
             gt.cell(i, j).text = rows[i][j]
-    style_table(gt, header_size=15, body_size=13.5)
+    style_table(gt, header_size=14, body_size=12.5)
     for i in range(1, len(rows)):
         for p in gt.cell(i, 1).text_frame.paragraphs:
             for r in p.runs:
                 r.font.bold = True
                 r.font.color.rgb = BLUE
-    txt(s, 0.5, 5.75, 12.3, 1.4,
-        'These four numeric cutoffs (QV, counts/cell, cells/gene) plus the negative-'
-        'control check are the standard pass. Keep them identical across every sample '
-        'in a project so groups stay comparable.',
-        size=15, color=NAVY)
+    txt(s, 0.5, 5.8, 12.3, 1.4,
+        'None of these are fixed 10x numbers — 10x says plot each distribution and set '
+        'cutoffs from the data (e.g. 3-5x MAD from the median), starting permissive and '
+        'keeping them identical across samples. Do it in Python (prompt Claude / scanpy) '
+        'or yourself in R (Seurat / Bioconductor).',
+        size=14, color=NAVY)
 
     # ---- Slide 4: filter by cluster ----
     s = add_blank(prs)
@@ -481,8 +486,8 @@ def main():
     bullets(s, 0.6, 1.55, 12.2, 4.8, [
         (0, 'You provide the files + the question; the pipeline builds matrix → ROIs '
             '→ QC → cell types → DE.', NAVY, True),
-        (0, 'Lock QC thresholds (QV≥20, counts/cell≥10, cells/gene≥5) and keep them '
-            'identical across all samples.', NAVY),
+        (0, 'The machine filters transcript quality (QV>=20) for you; you still must QC '
+            'cells and genes — set cutoffs from the data and keep them identical across samples.', NAVY),
         (0, 'Match the DE test to your design: pseudobulk when you have biological '
             'replicates; Wilcoxon only for exploration / true n=1.', BLUE, True),
         (0, 'A null pseudobulk result with large, consistent fold changes = underpowered '
