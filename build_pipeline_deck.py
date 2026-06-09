@@ -412,25 +412,27 @@ def main():
     # ---- Slide 4: filter by cluster ----
     s = add_blank(prs)
     slide_header(s, prs, 'Optional: pull just one cluster / cell population',
-                 'When you only want the cells in cluster X')
-    chip(s, 0.55, 1.7, 5.9, 0.55, 'In Xenium Explorer', PURPLE, size=15)
+                 'The cluster labels are already in the output files — no extra export needed')
+    chip(s, 0.55, 1.7, 5.9, 0.55, 'In Xenium Explorer (to look)', PURPLE, size=14)
     bullets(s, 0.6, 2.45, 6.0, 3.6, [
         (0, 'Open the Cell groups panel (right side).', NAVY),
         (0, 'Click the cluster you want → "Select cells in group".', NAVY),
-        (0, 'Open the Selection panel → download as CSV.', NAVY),
-        (0, 'You get cell IDs + coordinates for that cluster only.', GRAY),
-    ], size=16)
-    chip(s, 6.85, 1.7, 5.9, 0.55, 'Or filter afterward (robust)', BLUE, size=15)
-    bullets(s, 6.9, 2.45, 5.9, 3.6, [
-        (0, 'Export the full clustering CSV (all cells + cluster column).', NAVY),
-        (0, 'Filter to your cluster in pandas:', NAVY),
-        (1, 'df[df["Cluster"] == 1]', GRAY),
-        (0, 'Works regardless of Explorer version.', GRAY),
-    ], size=16)
-    txt(s, 0.55, 6.0, 12.2, 1.2,
-        'Heads-up: an Explorer cluster/selection CSV contains cell IDs + coordinates, '
-        'NOT expression counts. To analyze expression for those cells, hand the cell-ID '
-        'list to Claude and subset the count matrix on them.',
+        (0, 'Useful for viewing, but the selection CSV is just outlines / '
+            'coordinates — no counts.', GRAY),
+    ], size=15)
+    chip(s, 6.85, 1.7, 5.95, 0.55, 'Straight from the output (recommended)', BLUE, size=14)
+    bullets(s, 6.9, 2.45, 5.95, 3.8, [
+        (0, 'Cluster assignments already ship in each slide:', NAVY, True),
+        (1, 'analysis/clustering/', GRAY),
+        (1, 'gene_expression_graphclust/clusters.csv', GRAY),
+        (0, 'Two columns — Barcode (cell ID) + Cluster. Filter Cluster == 1.', NAVY),
+        (0, '10 clusterings ship: graphclust (Explorer default) + kmeans 2–10 '
+            '— just say which.', GRAY),
+    ], size=15)
+    txt(s, 0.55, 6.15, 12.2, 1.1,
+        'So Claude can pull cluster 1 directly from the output folder — no Explorer '
+        'export needed for cluster identity. Just specify the clustering (almost always '
+        'graphclust). Expression always comes from cell_feature_matrix.h5.',
         size=15, color=AMBER, bold=True)
 
     # ---- Slide 5: Wilcoxon vs pseudobulk (why each) ----
