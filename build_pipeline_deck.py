@@ -645,6 +645,45 @@ def main():
         'or an expert, and confirm a cluster isn\'t just one mouse or one slide.',
         size=12.5, color=AMBER, bold=True)
 
+    # ---- Slide 4d: two ways to cell type ----
+    s = add_blank(prs)
+    slide_header(s, prs, 'Two ways to assign cell types',
+                 'Both label the same cells — one leans on an annotated '
+                 'reference, the other on known marker genes')
+    chip(s, 0.55, 1.55, 5.95, 0.55, '1.  Reference mapping (label transfer)',
+         PURPLE, size=14)
+    bullets(s, 0.6, 2.3, 6.0, 4.2, [
+        (0, 'Start from an ALREADY-annotated reference dataset (an atlas).',
+            NAVY, True),
+        (0, 'Project your cells into a shared space; each cell inherits the '
+            'label of the reference cells it most resembles.', NAVY),
+        (0, 'Tools: Azimuth, Seurat TransferData, scANVI / scArches, '
+            'scanpy ingest.', GRAY),
+        (0, 'Pros: automated, consistent with the reference taxonomy, good for '
+            'fine subtypes.', NAVY),
+        (0, 'Needs: a high-quality reference matching your tissue, species '
+            'and platform.', GRAY),
+    ], size=14)
+    chip(s, 6.85, 1.55, 5.95, 0.55, '2.  Marker gene annotation', BLUE, size=14)
+    bullets(s, 6.9, 2.3, 5.95, 4.2, [
+        (0, 'Use known marker genes to decide identity — NO reference needed.',
+            NAVY, True),
+        (0, 'Cluster-then-label: cluster cells (leiden), read each cluster\'s '
+            'top markers, name it.', NAVY),
+        (1, '← the 10x / leiden run did this', BLUE, True),
+        (0, 'Per-cell scoring: score every cell against marker sets, take the '
+            'highest (score_genes → argmax).', NAVY),
+        (1, '← the V1 DE pipeline did this', GREEN, True),
+        (0, 'Pros: transparent, works without a matching reference. '
+            'Needs: curated marker lists + human judgement.', GRAY),
+    ], size=14)
+    txt(s, 0.55, 6.45, 12.3, 0.95,
+        'Both pipelines here used marker gene annotation — neither did reference '
+        'mapping. V1 scored each cell on canonical markers; the 10x run clustered '
+        'with leiden first, then labelled each cluster. Same family, two styles — '
+        'which is exactly why their DE results line up so closely.',
+        size=13, color=AMBER, bold=True)
+
     # ---- Slide 4b: spatial neighborhood / niche analysis ----
     s = add_blank(prs)
     slide_header(s, prs, 'Spatial neighborhood / niche analysis',
