@@ -308,6 +308,9 @@ def main():
     ap.add_argument('--wx-csv', required=True,
                     help='PI_Master_NvsA_V1_DE Wilcoxon CSV')
     ap.add_argument('--out', required=True, help='output .pptx path')
+    ap.add_argument('--compare-png', default=None,
+                    help='optional: cell-typing DE comparison volcano PNG '
+                         '(from wholecell_V1_celltyping_DE_compare.py)')
     ap.add_argument('--date', default='2026-06-09')
     args = ap.parse_args()
 
@@ -570,6 +573,33 @@ def main():
         'The contrasts that survive pseudobulk (e.g. the MAT2A and EtOH_MCT1i comparisons) '
         'are the ones with the strongest, most reproducible effects.',
         size=13.5, color=NAVY)
+
+    # ---- Slide 7b: does the cell-typing method change DE? ----
+    if args.compare_png and Path(args.compare_png).exists():
+        s = add_blank(prs)
+        slide_header(s, prs, 'Does the cell-typing method change the DE result?',
+                     'Same test (Wilcoxon), same contrast (EtOH_veh vs H2O_veh), '
+                     'same thresholds — only HOW cells were typed differs')
+        s.shapes.add_picture(str(args.compare_png), Inches(0.45), Inches(1.35),
+                             height=Inches(5.75))
+        chip(s, 7.35, 1.5, 5.5, 0.5, 'What it shows', PURPLE, size=14)
+        bullets(s, 7.4, 2.15, 5.55, 4.4, [
+            (0, 'Left column = marker-score typing (our DE pipeline); right = '
+                'leiden clusters (the 10x run).', NAVY, True),
+            (0, 'Neurons: 724 vs 689 sig genes, 640 shared (Jaccard 0.83) — '
+                'the DE answer barely moves.', BLUE, True),
+            (0, 'Astrocytes: 245 vs 122 sig, 96 shared (Jaccard 0.35) — '
+                'noticeably more sensitive.', GREEN, True),
+            (0, 'Why: neurons are abundant and cleanly separated, so both '
+                'methods grab nearly the same cells.', NAVY),
+            (0, 'Astrocytes are fewer and sit closer to other glia — the two '
+                'methods disagree on the borderline cells.', NAVY),
+        ], size=13)
+        txt(s, 7.4, 6.35, 5.55, 0.95,
+            'Takeaway: for big, distinct populations the DE is robust to the '
+            'typing method; for sparser types it is not — define them carefully '
+            'and state which method you used.',
+            size=12.5, color=AMBER, bold=True)
 
     # ---- Slide 8: takeaways ----
     s = add_blank(prs)
