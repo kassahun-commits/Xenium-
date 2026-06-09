@@ -7,6 +7,9 @@ Sections (confirmed with user 2026-06-09):
   1. The workflow, from the CSV/output files to results (general, large fonts).
   2-3. QC parameters to have Claude check: what each means + recommended threshold;
        plus how to filter by cluster in Xenium Explorer (light steps).
+  3b.  Cell typing: turning anonymous clusters into named cell types via marker
+       genes (recipe + brain marker cheat-sheet + where the lists come from).
+  3c.  Spatial neighborhood / niche analysis.
   4. Wilcoxon vs pseudobulk: why/when each, + the "null pseudobulk != no effect"
      diagnostic (effects go the same direction, just underpowered).
   5. The Wilcoxon-vs-pseudobulk significant-gene bar chart.
@@ -434,6 +437,59 @@ def main():
         'export needed for cluster identity. Just specify the clustering (almost always '
         'graphclust). Expression always comes from cell_feature_matrix.h5.',
         size=15, color=AMBER, bold=True)
+
+    # ---- Slide 4c: cell typing (cluster -> cell-type name) ----
+    s = add_blank(prs)
+    slide_header(s, prs, 'Cell typing: putting names on the clusters',
+                 'Clustering gives anonymous groups; the cell-type label is a '
+                 'separate, human-checked step')
+    chip(s, 0.55, 1.5, 5.6, 0.5, 'From clusters to cell types', PURPLE, size=14)
+    bullets(s, 0.6, 2.12, 5.7, 2.3, [
+        (0, 'Clustering only gives numbered groups (0, 1, 2 …) — never names.',
+            NAVY, True),
+        (0, 'For each cluster, list the genes it turns UP vs all other cells.',
+            NAVY),
+        (0, 'Match that marker signature to known cell-type markers (right).',
+            NAVY),
+        (0, 'Assign the label; merge clusters that share an identity, split '
+            'one that holds two.', NAVY),
+        (0, 'Shortcut: score every cell for each marker set, take the highest.',
+            GRAY),
+    ], size=13.5)
+    chip(s, 0.55, 4.55, 5.6, 0.5, 'Where the marker lists come from', BLUE,
+         size=14)
+    bullets(s, 0.6, 5.15, 5.7, 1.5, [
+        (0, 'Curated databases: PanglaoDB, CellMarker 2.0', GRAY),
+        (0, 'Brain-specific: Allen Brain Atlas / ABC Atlas', GRAY),
+        (0, 'Automated: Azimuth label-transfer vs an annotated reference', GRAY),
+    ], size=12.5)
+    chip(s, 6.45, 1.5, 6.4, 0.5, 'Brain marker cheat-sheet (mouse)', NAVY,
+         size=14)
+    mk = [
+        ('Cell type', 'Canonical markers'),
+        ('Excitatory neuron', 'Snap25, Slc17a7, Rbfox3'),
+        ('Inhibitory neuron', 'Gad1, Gad2, Slc32a1'),
+        ('Astrocyte', 'Aqp4, Gfap, Slc1a3, Gja1'),
+        ('Oligodendrocyte', 'Mbp, Mog, Mag, Cnp'),
+        ('OPC (oligo precursor)', 'Pdgfra, Olig2, Cspg4'),
+        ('Microglia', 'Csf1r, Cx3cr1, P2ry12'),
+        ('Endothelial', 'Cldn5, Slc2a1, Pecam1'),
+        ('Pericyte / mural', 'Pdgfrb, Notch3, Vtn'),
+    ]
+    mt = s.shapes.add_table(len(mk), 2, Inches(6.45), Inches(2.15),
+                            Inches(6.4), Inches(3.95)).table
+    mt.columns[0].width = Inches(2.7)
+    mt.columns[1].width = Inches(3.7)
+    for i in range(len(mk)):
+        for j in range(2):
+            mt.cell(i, j).text = mk[i][j]
+    style_table(mt, header_size=12.5, body_size=11.5)
+    txt(s, 0.55, 6.75, 12.3, 0.7,
+        'These eight are exactly what tagged our 19 clusters (Cnp/Mag/Mog → '
+        'oligo, Gad1/Gad2 → inhibitory, Slc1a3/Gja1 → astrocyte …). The names '
+        'are interpretation, not output — always sanity-check against an atlas '
+        'or an expert, and confirm a cluster isn\'t just one mouse or one slide.',
+        size=12.5, color=AMBER, bold=True)
 
     # ---- Slide 4b: spatial neighborhood / niche analysis ----
     s = add_blank(prs)
