@@ -56,6 +56,15 @@ V1_CONTRASTS = [
     ('MAT2A_OE', 'MAT2A_CM'),
     ('APP', 'H2O_veh'),
 ]
+# nucleus-only contrasts (all vs H2O_veh) for the nucleus bar slide
+NUC_CONTRASTS = [
+    ('EtOH_veh', 'H2O_veh'),
+    ('ChronicEtOH', 'H2O_veh'),
+    ('H2O_MCT1i', 'H2O_veh'),
+    ('EtOH_MCT1i', 'H2O_veh'),
+    ('MAT2A_CM', 'H2O_veh'),
+    ('MAT2A_OE', 'H2O_veh'),
+]
 PB_PADJ, PB_LFC = 0.05, 0.5
 WX_PADJ, WX_LFC = 1e-3, 0.5
 DIAG_CT, DIAG_TEST, DIAG_REF = 'Neuron', 'EtOH_veh', 'H2O_veh'
@@ -191,6 +200,79 @@ def fig_diagnostic(pb_csv, wx_csv, out_png):
     plt.close(fig)
 
 
+def fig_sig_bar_nucleus(pb_csv, wx_csv, out_png):
+    """Nucleus-only version of the V1 sig bar: # significant genes per contrast,
+    Wilcoxon vs pseudobulk, one panel per cell type. Both nucleus CSVs share a
+    `comparison` (= '{test}_vs_{ref}') schema and a `log2FoldChange` column."""
+    pb = pd.read_csv(pb_csv)
+    wx = pd.read_csv(wx_csv)
+    pb['sig'] = (pb['padj'] < PB_PADJ) & (pb['log2FoldChange'].abs() > PB_LFC)
+    wx['sig'] = (wx['padj'] < WX_PADJ) & (wx['log2FoldChange'].abs() > WX_LFC)
+
+    cts = ['Neuron', 'Astrocyte']
+    labels = [f'{t}\nvs {r}' for t, r in NUC_CONTRASTS]
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.0))
+    for ax, ct in zip(axes, cts):
+        pb_vals, wx_vals = [], []
+        for t, r in NUC_CONTRASTS:
+            comp = f'{t}_vs_{r}'
+            pb_vals.append(int(pb[(pb['celltype'] == ct) &
+                                  (pb['comparison'] == comp) &
+                                  (pb['sig'])].shape[0]))
+            wx_vals.append(int(wx[(wx['celltype'] == ct) &
+                                  (wx['comparison'] == comp) &
+                                  (wx['sig'])].shape[0]))
+        x = np.arange(len(labels))
+        w = 0.4
+        b1 = ax.bar(x - w / 2, wx_vals, w, color='#d62728',
+                    label='Cell-level Wilcoxon (padj<1e-3)')
+        b2 = ax.bar(x + w / 2, pb_vals, w, color='#1f77b4',
+                    label='Pseudobulk DESeq2 (padj<0.05)')
+        ax.set_title(ct, fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, fontsize=7.5)
+        ax.set_ylabel('# significant genes (|log2FC|>0.5)', fontsize=10)
+        ax.bar_label(b1, fontsize=7.5, padding=1)
+        ax.bar_label(b2, fontsize=7.5, padding=1)
+        for sp in ['top', 'right']:
+            ax.spines[sp].set_visible(False)
+        if ct == 'Neuron':
+            ax.legend(fontsize=9, frameon=False, loc='upper left')
+    fig.suptitle('Nucleus-only: same cells, two tests — Wilcoxon inflates the hit list',
+                 fontsize=14, fontweight='bold')
+    plt.tight_layout(rect=[0, 0, 1, 0.94])
+    plt.savefig(out_png, dpi=170, bbox_inches='tight')
+    plt.close(fig)
+
+
+def compare_stats(csv, highlight=None):
+    """Recompute the cell-typing-method comparison numbers straight from the
+    compare CSV (cols: celltype, gene, logfc, padj, method, significant) so the
+    deck slide never hardcodes them. Returns {celltype: {...}}."""
+    df = pd.read_csv(csv)
+    out = {}
+    for ct in ['Neuron', 'Astrocyte']:
+        sub = df[df['celltype'] == ct]
+        m = set(sub[(sub['method'] == 'marker-typed') & (sub['significant'])]['gene'])
+        l = set(sub[(sub['method'] == 'leiden-typed') & (sub['significant'])]['gene'])
+        shared = m & l
+        union = m | l
+        jac = len(shared) / len(union) if union else float('nan')
+        rec = {'marker_sig': len(m), 'leiden_sig': len(l),
+               'shared': len(shared), 'jaccard': jac, 'hl': None}
+        if highlight:
+            hl = {}
+            for meth in ['marker-typed', 'leiden-typed']:
+                row = sub[(sub['method'] == meth) & (sub['gene'] == highlight)]
+                if len(row):
+                    rr = row.iloc[0]
+                    hl[meth] = (float(rr['logfc']), float(rr['padj']),
+                                bool(rr['significant']))
+            rec['hl'] = hl
+        out[ct] = rec
+    return out
+
+
 # ---- pptx helpers --------------------------------------------------------
 def add_blank(prs):
     return prs.slides.add_slide(prs.slide_layouts[6])
@@ -300,6 +382,56 @@ def style_table(table, header_size=13, body_size=12, bold_col0=True):
                         r.font.bold = True
 
 
+def add_compare_slide(prs, png, csv, test, ref, highlight=None):
+    """Cell-typing-method DE comparison slide. All numbers (sig counts, shared,
+    Jaccard, highlight-gene status) are recomputed from `csv` — nothing
+    hardcoded — so it works for any contrast."""
+    st = compare_stats(csv, highlight)
+    n, a = st['Neuron'], st['Astrocyte']
+    s = add_blank(prs)
+    slide_header(s, prs, 'Does the cell-typing method change the DE result?',
+                 f'Same test (Wilcoxon), same contrast ({test} vs {ref}), '
+                 'same thresholds — only HOW cells were typed differs')
+    s.shapes.add_picture(str(png), Inches(0.45), Inches(1.35),
+                         height=Inches(5.75))
+    chip(s, 7.35, 1.5, 5.5, 0.5, 'What it shows', PURPLE, size=14)
+    items = [
+        (0, 'Left column = marker-score typing (our DE pipeline); right = '
+            'leiden clusters (the 10x run).', NAVY, True),
+        (0, f"Neurons: {n['marker_sig']} vs {n['leiden_sig']} sig genes, "
+            f"{n['shared']} shared (Jaccard {n['jaccard']:.2f}) — "
+            'the DE answer barely moves.', BLUE, True),
+        (0, f"Astrocytes: {a['marker_sig']} vs {a['leiden_sig']} sig, "
+            f"{a['shared']} shared (Jaccard {a['jaccard']:.2f}) — "
+            'noticeably more sensitive.', GREEN, True),
+        (0, 'Why: neurons are abundant and cleanly separated, so both '
+            'methods grab nearly the same cells.', NAVY),
+        (0, 'Astrocytes are fewer and sit closer to other glia — the two '
+            'methods disagree on the borderline cells.', NAVY),
+    ]
+    # if a highlight gene was requested, report its status both ways
+    if highlight and n['hl']:
+        def _fmt(d, ct):
+            hl = st[ct]['hl']
+            parts = []
+            for meth, lab in [('marker-typed', 'marker'),
+                              ('leiden-typed', 'leiden')]:
+                if meth in hl:
+                    lfc, padj, sig = hl[meth]
+                    parts.append(f"{lab} log2FC={lfc:+.2f}, padj={padj:.1e} "
+                                 f"({'SIG' if sig else 'n.s.'})")
+            return '; '.join(parts)
+        items.append(
+            (0, f"{highlight} (Neuron): {_fmt(st, 'Neuron')}",
+             RED, True))
+    bullets(s, 7.4, 2.15, 5.55, 4.4, items, size=12.5)
+    txt(s, 7.4, 6.5, 5.55, 0.85,
+        'Takeaway: for big, distinct populations the DE is robust to the '
+        'typing method; for sparser types it is not — define them carefully '
+        'and state which method you used.',
+        size=12, color=AMBER, bold=True)
+
+
 # ---- build ---------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
@@ -308,9 +440,16 @@ def main():
     ap.add_argument('--wx-csv', required=True,
                     help='PI_Master_NvsA_V1_DE Wilcoxon CSV')
     ap.add_argument('--out', required=True, help='output .pptx path')
-    ap.add_argument('--compare-png', default=None,
-                    help='optional: cell-typing DE comparison volcano PNG '
-                         '(from wholecell_V1_celltyping_DE_compare.py)')
+    ap.add_argument('--compare', action='append', default=[],
+                    help='repeatable cell-typing DE comparison spec, '
+                         'PNG|CSV|TEST|REF[|HIGHLIGHT] '
+                         '(from wholecell_V1_celltyping_DE_compare.py). '
+                         'Pass once per contrast.')
+    ap.add_argument('--nuc-pb-csv', default=None,
+                    help='optional: nucleus-only Pseudobulk DE results CSV '
+                         '(adds a nucleus version of the sig-bar slide)')
+    ap.add_argument('--nuc-wx-csv', default=None,
+                    help='optional: nucleus-only Wilcoxon DE results CSV')
     ap.add_argument('--date', default='2026-06-09')
     args = ap.parse_args()
 
@@ -325,6 +464,12 @@ def main():
     fig_sig_bar(args.pb_csv, args.wx_csv, sig_png)
     print('[fig] underpowered-vs-null diagnostic...')
     fig_diagnostic(args.pb_csv, args.wx_csv, diag_png)
+
+    nuc_sig_png = None
+    if args.nuc_pb_csv and args.nuc_wx_csv:
+        nuc_sig_png = assets / 'sig_bar_nucleus.png'
+        print('[fig] nucleus-only significance bar chart...')
+        fig_sig_bar_nucleus(args.nuc_pb_csv, args.nuc_wx_csv, nuc_sig_png)
 
     prs = Presentation()
     prs.slide_width = Inches(13.333)
@@ -574,32 +719,35 @@ def main():
         'are the ones with the strongest, most reproducible effects.',
         size=13.5, color=NAVY)
 
-    # ---- Slide 7b: does the cell-typing method change DE? ----
-    if args.compare_png and Path(args.compare_png).exists():
+    # ---- Slide 7n: nucleus-only version of the bar chart ----
+    if nuc_sig_png is not None:
         s = add_blank(prs)
-        slide_header(s, prs, 'Does the cell-typing method change the DE result?',
-                     'Same test (Wilcoxon), same contrast (EtOH_veh vs H2O_veh), '
-                     'same thresholds — only HOW cells were typed differs')
-        s.shapes.add_picture(str(args.compare_png), Inches(0.45), Inches(1.35),
-                             height=Inches(5.75))
-        chip(s, 7.35, 1.5, 5.5, 0.5, 'What it shows', PURPLE, size=14)
-        bullets(s, 7.4, 2.15, 5.55, 4.4, [
-            (0, 'Left column = marker-score typing (our DE pipeline); right = '
-                'leiden clusters (the 10x run).', NAVY, True),
-            (0, 'Neurons: 724 vs 689 sig genes, 640 shared (Jaccard 0.83) — '
-                'the DE answer barely moves.', BLUE, True),
-            (0, 'Astrocytes: 245 vs 122 sig, 96 shared (Jaccard 0.35) — '
-                'noticeably more sensitive.', GREEN, True),
-            (0, 'Why: neurons are abundant and cleanly separated, so both '
-                'methods grab nearly the same cells.', NAVY),
-            (0, 'Astrocytes are fewer and sit closer to other glia — the two '
-                'methods disagree on the borderline cells.', NAVY),
-        ], size=13)
-        txt(s, 7.4, 6.35, 5.55, 0.95,
-            'Takeaway: for big, distinct populations the DE is robust to the '
-            'typing method; for sparser types it is not — define them carefully '
-            'and state which method you used.',
-            size=12.5, color=AMBER, bold=True)
+        slide_header(s, prs, 'Nucleus-only: same data, two tests',
+                     'Significant genes per contrast (|log2FC|>0.5), '
+                     'nucleus-only segmentation (all vs H2O_veh)')
+        s.shapes.add_picture(str(nuc_sig_png), Inches(0.6), Inches(1.45),
+                             width=Inches(12.1))
+        txt(s, 0.55, 6.35, 12.2, 1.0,
+            'Same pattern holds on the nucleus-only data: cell-level Wilcoxon (red) '
+            'returns far more "hits" than pseudobulk (blue) under the looser p-cut. '
+            'The inflation is pseudoreplication, not a property of the segmentation — '
+            'pseudobulk stays the reviewer-defensible primary analysis.',
+            size=13.5, color=NAVY)
+
+    # ---- Slide 7b: does the cell-typing method change DE? (one per --compare) ----
+    for spec in args.compare:
+        parts = spec.split('|')
+        if len(parts) < 4:
+            print(f'[warn] skipping malformed --compare spec: {spec}')
+            continue
+        png, csv, test, ref = parts[0], parts[1], parts[2], parts[3]
+        highlight = parts[4] if len(parts) > 4 and parts[4] else None
+        if not Path(png).exists() or not Path(csv).exists():
+            print(f'[warn] skipping --compare, missing file(s): {png} / {csv}')
+            continue
+        print(f'[slide] compare {test} vs {ref}'
+              + (f' (highlight {highlight})' if highlight else ''))
+        add_compare_slide(prs, png, csv, test, ref, highlight)
 
     # ---- Slide 8: takeaways ----
     s = add_blank(prs)

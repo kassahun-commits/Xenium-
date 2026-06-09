@@ -34,7 +34,8 @@ plt.rcParams['pdf.fonttype'] = 42
 plt.rcParams['ps.fonttype'] = 42
 plt.rcParams['svg.fonttype'] = 'none'
 
-TEST, REF = 'EtOH_veh', 'H2O_veh'
+TEST, REF = 'EtOH_veh', 'H2O_veh'   # overridden by CLI in main()
+HIGHLIGHT = None                     # optional gene to flag in every panel
 CELLTYPES = ['Neuron', 'Astrocyte']
 # leiden clusters -> cell type, from the 10x-run marker genes
 # (Cnp/Mag/Mog=oligo, Gad1/Gad2=inhib neuron, Slc1a3/Gja1=astro, etc.)
@@ -85,9 +86,28 @@ def volcano(ax, de, title, accent):
         ax.axvline(v, ls='--', color='k', lw=0.6, alpha=0.4)
     lab = pd.concat([de[up].nlargest(6, 'logfc'), de[dn].nsmallest(6, 'logfc')])
     for _, rr in lab.iterrows():
+        if HIGHLIGHT and str(rr['gene']).lower() == HIGHLIGHT.lower():
+            continue  # highlighted gene labelled separately below
         ax.annotate(rr['gene'],
                     (rr['logfc'], -np.log10(max(rr['padj'], 1e-300))),
                     fontsize=5.5, ha='center', va='bottom', color='#333')
+    # flag the gene of interest (e.g. Grin2d) in every panel
+    hl = None
+    if HIGHLIGHT:
+        hg = de[de['gene'].astype(str).str.lower() == HIGHLIGHT.lower()]
+        if len(hg):
+            rr = hg.iloc[0]
+            hx = rr['logfc']
+            hy = -np.log10(max(rr['padj'], 1e-300))
+            hsig = bool((rr['padj'] < PADJ_THRESH) and
+                        (abs(rr['logfc']) > LFC_THRESH))
+            ax.scatter([hx], [hy], s=90, marker='*', c='#d62728',
+                       edgecolor='k', linewidth=0.6, zorder=6)
+            ax.annotate(f"{rr['gene']}  log2FC={rr['logfc']:.2f}, "
+                        f"padj={rr['padj']:.1e}  [{'SIG' if hsig else 'n.s.'}]",
+                        (hx, hy), fontsize=6.5, ha='left', va='bottom',
+                        color='#d62728', fontweight='bold', zorder=7)
+            hl = (float(rr['logfc']), float(rr['padj']), hsig)
     ax.set_title(f'{title}\n{int(up.sum())} up / {int(dn.sum())} down '
                  f'(padj<{PADJ_THRESH:g}, |log2FC|>{LFC_THRESH})', fontsize=9)
     ax.set_xlabel(f'log2 fold change ({TEST}/{REF})', fontsize=8)
@@ -95,7 +115,7 @@ def volcano(ax, de, title, accent):
     ax.tick_params(labelsize=7)
     for sp in ['top', 'right']:
         ax.spines[sp].set_visible(False)
-    return int(up.sum()), int(dn.sum()), set(de[sig]['gene'])
+    return int(up.sum()), int(dn.sum()), set(de[sig]['gene']), hl
 
 
 def main():
@@ -104,8 +124,15 @@ def main():
     ap.add_argument('--marker-de-csv', required=True,
                     help='PI_Master_NvsA_V1_DE Wilcoxon CSV (marker-typed)')
     ap.add_argument('--out-dir', required=True)
+    ap.add_argument('--test', default='EtOH_veh', help='treatment group')
+    ap.add_argument('--ref', default='H2O_veh', help='reference group')
+    ap.add_argument('--highlight', default=None,
+                    help='gene to flag in every panel (e.g. Grin2d)')
     ap.add_argument('--date', default='2026-06-09')
     args = ap.parse_args()
+
+    global TEST, REF, HIGHLIGHT
+    TEST, REF, HIGHLIGHT = args.test, args.ref, args.highlight
 
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -144,21 +171,23 @@ def main():
     # ---- 2x2 volcano: rows = cell type, cols = typing method ----
     fig, axes = plt.subplots(2, 2, figsize=(10.5, 9.0))
     summary = {}
+    hl_report = {}
     for i, ct in enumerate(CELLTYPES):
         m = mk[mk['celltype'] == ct].rename(columns={'logfc': 'logfc'})
         nt_m = int(m['n_test_cells'].iloc[0]) if len(m) else 0
         nr_m = int(m['n_ref_cells'].iloc[0]) if len(m) else 0
-        u1, d1, set_m = volcano(
+        u1, d1, set_m, hl_m = volcano(
             axes[i][0], m[['gene', 'logfc', 'padj']],
             f'{ct} — marker-typed (n={nt_m} vs {nr_m})', CT_COLOR[ct])
         nt_l, nr_l = leiden_de[ct + '_n']
-        u2, d2, set_l = volcano(
+        u2, d2, set_l, hl_l = volcano(
             axes[i][1], leiden_de[ct][['gene', 'logfc', 'padj']],
             f'{ct} — leiden-typed (n={nt_l} vs {nr_l})', CT_COLOR[ct])
         inter = len(set_m & set_l)
         uni = len(set_m | set_l)
         jac = (inter / uni) if uni else float('nan')
         summary[ct] = (u1 + d1, u2 + d2, inter, jac)
+        hl_report[ct] = (hl_m, hl_l)
         axes[i][0].text(-0.18, 0.5, ct, transform=axes[i][0].transAxes,
                         rotation=90, va='center', ha='center',
                         fontsize=13, fontweight='bold', color=CT_COLOR[ct])
@@ -196,6 +225,17 @@ def main():
     for ct in CELLTYPES:
         print(f'  {ct}: marker {summary[ct][0]} sig, leiden {summary[ct][1]} '
               f'sig, {summary[ct][2]} shared, Jaccard {summary[ct][3]:.2f}')
+    if HIGHLIGHT:
+        print(f'\n[highlight] {HIGHLIGHT} ({TEST} vs {REF}):')
+        for ct in CELLTYPES:
+            for meth, hl in zip(('marker-typed', 'leiden-typed'), hl_report[ct]):
+                if hl is None:
+                    print(f'  {ct:>9} {meth:>13}: not in gene set')
+                else:
+                    lfc, padj, sig = hl
+                    print(f'  {ct:>9} {meth:>13}: log2FC={lfc:+.3f}, '
+                          f'padj={padj:.2e}  -> {"SIGNIFICANT" if sig else "n.s."}'
+                          f'  (cut: padj<{PADJ_THRESH:g}, |log2FC|>{LFC_THRESH})')
 
 
 if __name__ == '__main__':
