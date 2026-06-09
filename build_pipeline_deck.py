@@ -45,6 +45,9 @@ WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 GREEN = RGBColor(0x2C, 0xA0, 0x2C)
 AMBER = RGBColor(0xE8, 0x8A, 0x00)
 PURPLE = RGBColor(0x6B, 0x4E, 0x9E)
+TEAL = RGBColor(0x0E, 0x7C, 0x86)   # tag: whole-cell segmentation
+NUCP = RGBColor(0x8E, 0x44, 0xAD)   # tag: nucleus-only segmentation
+SLATE = RGBColor(0x44, 0x55, 0x66)  # tag: "choice / axis" explainer slides
 
 # V1 whole-cell contrasts (test, reference) -> pseudobulk comparison string
 V1_CONTRASTS = [
@@ -245,6 +248,76 @@ def fig_sig_bar_nucleus(pb_csv, wx_csv, out_png):
     plt.close(fig)
 
 
+def export_bar_genes_xlsx(v1_pb_csv, v1_wx_csv, nuc_pb_csv, nuc_wx_csv,
+                          out_xlsx):
+    """Source data for the two bar-chart slides: every gene counted in each bar,
+    with its log2 fold change and adjusted p-value. One sheet per dataset, plus
+    a Summary sheet whose counts reproduce the bar heights exactly.
+
+    Significance rules match each figure:
+      V1 Wilcoxon (PI_Master):  padj<1e-3 & |logfc|>0.5
+      V1 pseudobulk:            the CSV 'significant' column
+      nucleus Wilcoxon:         padj<1e-3 & |log2FoldChange|>0.5
+      nucleus pseudobulk:       padj<0.05  & |log2FoldChange|>0.5
+    """
+    cols = ['cell_type', 'contrast', 'test', 'gene', 'log2FC', 'padj']
+
+    def _v1():
+        wx = pd.read_csv(v1_wx_csv)
+        wx = wx[_wx_sig(wx)].copy()
+        wx['contrast'] = wx['test'] + '_vs_' + wx['reference']
+        keep = {f'{t}_vs_{r}' for t, r in V1_CONTRASTS}
+        wx = wx[wx['contrast'].isin(keep)]
+        wxo = wx.rename(columns={'subtype': 'cell_type', 'logfc': 'log2FC'})
+        wxo['test'] = 'Cell-level Wilcoxon'
+        wxo = wxo[cols]
+
+        pb = pd.read_csv(v1_pb_csv)
+        pb = pb[(pb['significant']) & (pb['comparison'].isin(keep))].copy()
+        pbo = pb.rename(columns={'celltype': 'cell_type',
+                                 'comparison': 'contrast',
+                                 'log2FoldChange': 'log2FC'})
+        pbo['test'] = 'Pseudobulk DESeq2'
+        pbo = pbo[cols]
+        return pd.concat([wxo, pbo], ignore_index=True)
+
+    def _nuc():
+        wx = pd.read_csv(nuc_wx_csv)
+        wx = wx[(wx['padj'] < WX_PADJ) &
+                (wx['log2FoldChange'].abs() > WX_LFC)].copy()
+        pb = pd.read_csv(nuc_pb_csv)
+        pb = pb[(pb['padj'] < PB_PADJ) &
+                (pb['log2FoldChange'].abs() > PB_LFC)].copy()
+        keep = {f'{t}_vs_{r}' for t, r in NUC_CONTRASTS}
+        out = []
+        for df, name in [(wx, 'Cell-level Wilcoxon'),
+                         (pb, 'Pseudobulk DESeq2')]:
+            d = df[df['comparison'].isin(keep)].rename(
+                columns={'celltype': 'cell_type', 'comparison': 'contrast',
+                         'log2FoldChange': 'log2FC'}).copy()
+            d['test'] = name
+            out.append(d[cols])
+        return pd.concat(out, ignore_index=True)
+
+    v1 = _v1().sort_values(['cell_type', 'contrast', 'test', 'padj'])
+    nuc = _nuc().sort_values(['cell_type', 'contrast', 'test', 'padj'])
+
+    def _summary(df, dataset):
+        g = (df.groupby(['cell_type', 'contrast', 'test'])
+             .size().reset_index(name='n_significant_genes'))
+        g.insert(0, 'dataset', dataset)
+        return g
+    summary = pd.concat([_summary(v1, 'Whole-cell'),
+                         _summary(nuc, 'Nucleus-only')], ignore_index=True)
+
+    with pd.ExcelWriter(out_xlsx, engine='openpyxl') as xw:
+        summary.to_excel(xw, sheet_name='Summary (bar heights)', index=False)
+        v1.to_excel(xw, sheet_name='Whole-cell genes', index=False)
+        nuc.to_excel(xw, sheet_name='Nucleus-only genes', index=False)
+    print(f'[xlsx] {out_xlsx}  '
+          f'(whole-cell {len(v1)} rows, nucleus {len(nuc)} rows)')
+
+
 def compare_stats(csv, highlight=None):
     """Recompute the cell-typing-method comparison numbers straight from the
     compare CSV (cols: celltype, gene, logfc, padj, method, significant) so the
@@ -352,12 +425,16 @@ def arrow(slide, l, t, w, h=0.3, color=LGRAY):
     return s
 
 
-def slide_header(slide, prs, title, sub=None):
+def slide_header(slide, prs, title, sub=None, tag=None, tag_color=None):
     band(slide, prs)
-    txt(slide, 0.5, 0.16, 12.3, 0.62, title, size=28, bold=True, color=WHITE)
+    tw = 8.8 if tag else 12.3
+    txt(slide, 0.5, 0.16, tw, 0.62, title, size=28, bold=True, color=WHITE)
     if sub:
-        txt(slide, 0.5, 0.74, 12.3, 0.32, sub, size=13,
+        txt(slide, 0.5, 0.74, tw, 0.32, sub, size=13,
             color=RGBColor(0xCF, 0xDA, 0xE6))
+    if tag:
+        chip(slide, 9.5, 0.29, 3.4, 0.47, tag, tag_color or TEAL,
+             tcolor=WHITE, size=11)
 
 
 def style_table(table, header_size=13, body_size=12, bold_col0=True):
@@ -391,7 +468,8 @@ def add_compare_slide(prs, png, csv, test, ref, highlight=None):
     s = add_blank(prs)
     slide_header(s, prs, 'Does the cell-typing method change the DE result?',
                  f'Same test (Wilcoxon), same contrast ({test} vs {ref}), '
-                 'same thresholds — only HOW cells were typed differs')
+                 'same thresholds — only HOW cells were typed differs',
+                 tag='Whole-cell · marker vs leiden', tag_color=TEAL)
     s.shapes.add_picture(str(png), Inches(0.45), Inches(1.35),
                          height=Inches(5.75))
     chip(s, 7.35, 1.5, 5.5, 0.5, 'What it shows', PURPLE, size=14)
@@ -470,6 +548,12 @@ def main():
         nuc_sig_png = assets / 'sig_bar_nucleus.png'
         print('[fig] nucleus-only significance bar chart...')
         fig_sig_bar_nucleus(args.nuc_pb_csv, args.nuc_wx_csv, nuc_sig_png)
+        # source data for the two bar-chart slides (genes + log2FC + padj)
+        bar_xlsx = out.parent / f'Xenium_BarChart_SignificantGenes_' \
+                                f'WholeCell_Nucleus_{D}.xlsx'
+        print('[xlsx] bar-chart significant-gene source data...')
+        export_bar_genes_xlsx(args.pb_csv, args.wx_csv,
+                              args.nuc_pb_csv, args.nuc_wx_csv, bar_xlsx)
 
     prs = Presentation()
     prs.slide_width = Inches(13.333)
@@ -518,11 +602,44 @@ def main():
         'files and the questions; the pipeline builds the rest.',
         size=16, color=NAVY)
 
+    # ---- Slide 2b: the iterations roadmap ----
+    s = add_blank(prs)
+    slide_header(s, prs, 'What this deck compares: three choices',
+                 'Each comparison varies ONE of these and holds the rest fixed — '
+                 'a tag in the top-right names which.')
+    roadmap = [
+        ('Segmentation', 'Whole-cell', TEAL, 'Nucleus-only', NUCP,
+         'Which part of the cell we count transcripts in'),
+        ('Cell typing\n(= the two pipelines)',
+         'Marker scoring\n(V1 DE pipeline)', GREEN,
+         'Leiden clusters\n(10x pipeline)', BLUE,
+         'How each cell gets its identity'),
+        ('DE test', 'Cell-level Wilcoxon', RED, 'Pseudobulk DESeq2', BLUE,
+         'How we test treatment effects (pseudobulk = rigorous primary)'),
+    ]
+    y = 1.7
+    for label, oa, ca, ob, cb, cap in roadmap:
+        txt(s, 0.55, y + 0.02, 2.75, 0.95, label, size=15, bold=True, color=NAVY)
+        chip(s, 3.5, y, 3.2, 0.78, oa, ca, size=13)
+        txt(s, 6.78, y + 0.2, 0.55, 0.4, 'vs', size=14, bold=True, color=GRAY,
+            align=PP_ALIGN.CENTER)
+        chip(s, 7.45, y, 3.2, 0.78, ob, cb, size=13)
+        txt(s, 10.78, y + 0.06, 2.4, 0.85, cap, size=10.5, color=GRAY)
+        y += 1.45
+    txt(s, 0.55, 6.45, 12.3, 0.9,
+        'We do NOT run every combination. Each comparison slide changes just one '
+        'of these three and keeps the rest fixed. The corner tag (e.g. '
+        '"Whole-cell · Wilcoxon vs pseudobulk") names the iteration on screen. '
+        'Pseudobulk is the rigorous primary test; the cell-typing comparisons that '
+        'follow are Wilcoxon-based, so we trace that thread through to the end.',
+        size=13, color=AMBER, bold=True)
+
     # ---- Slide 3: downstream QC, side-by-side (DE pipeline vs 10x workshop) ----
     s = add_blank(prs)
     slide_header(s, prs, 'Downstream QC: the DE pipeline vs the 10x workshop',
                  'Both run AFTER the instrument\'s QV>=20 transcript filter — '
-                 'same raw data, different goals, different cutoffs.')
+                 'same raw data, different goals, different cutoffs.',
+                 tag='Whole-cell', tag_color=TEAL)
     rows = [
         ('QC / processing step', 'V1 DE pipeline  (made the data)',
          '10x workshop pipeline  (just run)'),
@@ -649,7 +766,8 @@ def main():
     s = add_blank(prs)
     slide_header(s, prs, 'Two ways to assign cell types',
                  'Both label the same cells — one leans on an annotated '
-                 'reference, the other on known marker genes')
+                 'reference, the other on known marker genes',
+                 tag='Choice: cell typing', tag_color=SLATE)
     chip(s, 0.55, 1.55, 5.95, 0.55, '1.  Reference mapping (label transfer)',
          PURPLE, size=14)
     bullets(s, 0.6, 2.3, 6.0, 4.2, [
@@ -688,7 +806,8 @@ def main():
     s = add_blank(prs)
     slide_header(s, prs, 'Spatial neighborhood / niche analysis',
                  'Which cells sit near a given cell type — and what recurrent '
-                 'microenvironments exist')
+                 'microenvironments exist',
+                 tag='Whole-cell', tag_color=TEAL)
     chip(s, 0.55, 1.6, 5.9, 0.55, 'Questions you can ask', PURPLE, size=14)
     bullets(s, 0.6, 2.3, 6.0, 4.2, [
         (0, 'Is cell type A enriched right next to cell type B?', NAVY),
@@ -714,7 +833,8 @@ def main():
     # ---- Slide 5: Wilcoxon vs pseudobulk (why each) ----
     s = add_blank(prs)
     slide_header(s, prs, 'Two ways to test differential expression',
-                 'Pick the test that matches your replicate structure')
+                 'Pick the test that matches your replicate structure',
+                 tag='Choice: DE test', tag_color=SLATE)
     chip(s, 0.55, 1.55, 5.95, 0.55, 'Cell-level Wilcoxon', RED, size=15)
     bullets(s, 0.6, 2.25, 6.0, 4.6, [
         (0, 'Treats every CELL as a sample.', NAVY, True),
@@ -736,7 +856,8 @@ def main():
     # ---- Slide 6: the diagnostic (null != no effect) ----
     s = add_blank(prs)
     slide_header(s, prs, 'A "no significant DE" result is not always "no effect"',
-                 'Worked example: EtOH_veh vs H2O_veh, neurons (n=2 vs 2)')
+                 'Worked example: EtOH_veh vs H2O_veh, neurons (n=2 vs 2)',
+                 tag='Whole-cell · pseudobulk', tag_color=TEAL)
     s.shapes.add_picture(str(diag_png), Inches(0.7), Inches(1.5),
                          width=Inches(12.0))
     txt(s, 0.55, 6.55, 12.2, 0.85,
@@ -748,7 +869,8 @@ def main():
     # ---- Slide 7: the bar chart ----
     s = add_blank(prs)
     slide_header(s, prs, 'Same data, two tests — the size of the inflation',
-                 'Significant genes per contrast (|log2FC|>0.5), V1 whole-cell')
+                 'Significant genes per contrast (|log2FC|>0.5), V1 whole-cell',
+                 tag='Whole-cell · Wilcoxon vs pseudobulk', tag_color=TEAL)
     s.shapes.add_picture(str(sig_png), Inches(0.6), Inches(1.45),
                          width=Inches(12.1))
     txt(s, 0.55, 6.35, 12.2, 1.0,
@@ -763,7 +885,9 @@ def main():
         s = add_blank(prs)
         slide_header(s, prs, 'Nucleus-only: same data, two tests',
                      'Significant genes per contrast (|log2FC|>0.5), '
-                     'nucleus-only segmentation (all vs H2O_veh)')
+                     'nucleus-only segmentation (all vs H2O_veh)',
+                     tag='Nucleus-only · Wilcoxon vs pseudobulk',
+                     tag_color=NUCP)
         s.shapes.add_picture(str(nuc_sig_png), Inches(0.6), Inches(1.45),
                              width=Inches(12.1))
         txt(s, 0.55, 6.35, 12.2, 1.0,
