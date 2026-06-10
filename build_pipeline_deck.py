@@ -988,9 +988,9 @@ def main():
                              Inches(pic_left), Inches(1.12),
                              height=Inches(pic_h))
         txt(s, 0.30, 7.06, 12.73, 0.38,
-            'Dot SIZE = % of cells positive · COLOUR = Wilcoxon log2FC vs '
-            'H2O_veh (red up, blue down, clipped ±1). Nucleus dots are smaller '
-            'and fold changes muted — fewer transcripts per nucleus.',
+            'Dot SIZE = % cells positive. Leftmost "H2O_veh baseline" column: '
+            'COLOUR = mean baseline expression (viridis). Four FC columns: '
+            'COLOUR = Wilcoxon log2FC vs H2O_veh (red up / blue down, clipped ±1).',
             size=10, color=AMBER, bold=True)
 
     # ---- Slide 7b: does the cell-typing method change DE? (one per --compare) ----

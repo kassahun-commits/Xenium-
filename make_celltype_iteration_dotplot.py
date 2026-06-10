@@ -93,7 +93,9 @@ def dense_col(M):
 # --------------------------- % positive from an AnnData ---------------------
 def frac_positive(adata, genes, celltype_col='celltype'):
     """Per (gene, cell_type in PANELS, group in GROUPS): % cells with counts>0,
-    and n cells per (cell_type, group). Uses layers['counts'] if present."""
+    mean (normalized/log) expression, and n cells per (cell_type, group).
+    Uses layers['counts'] for detection; uses .X (log-normalized) for the mean
+    expression that colours the baseline column."""
     keep = (adata.obs[celltype_col].astype(str).isin(PANELS) &
             adata.obs['group'].astype(str).isin(GROUPS))
     sub = adata[keep.values].copy()
@@ -107,14 +109,16 @@ def frac_positive(adata, genes, celltype_col='celltype'):
     n_cells = {k: int(v.size) for k, v in keyidx.items()}
 
     use_counts = 'counts' in sub.layers
-    frac_pos = {}
+    frac_pos, mean_expr = {}, {}
     for gene in present:
         c = dense_col(sub[:, gene].layers['counts'] if use_counts else sub[:, gene].X)
+        x = dense_col(sub[:, gene].X)
         pos = (c > 0).astype(float)
         for k, idx in keyidx.items():
             if idx.size:
                 frac_pos[(gene, *k)] = float(pos[idx].mean())
-    return frac_pos, n_cells, set(present)
+                mean_expr[(gene, *k)] = float(x[idx].mean())
+    return frac_pos, mean_expr, n_cells, set(present)
 
 
 # --------------------------- log2FC lookups ---------------------------------
@@ -143,12 +147,31 @@ def lfc_lookup_nucleus(csv):
 
 
 # --------------------------- build table ------------------------------------
-def build_table(genes, frac_pos, n_cells, present, lfc_lut, min_cells,
-                segment=None):
+BASELINE_GROUP = 'H2O_veh'
+BASELINE_LABEL = 'H2O_veh\nbaseline'
+
+
+def build_table(genes, frac_pos, mean_expr, n_cells, present, lfc_lut,
+                min_cells, segment=None):
     rows = []
     for gene in genes:
         in_panel = gene in present
         for ct in PANELS:
+            # --- baseline column: H2O_veh control (size=%pos, colour=mean expr) ---
+            n_b = n_cells.get((ct, BASELINE_GROUP), 0)
+            fb = frac_pos.get((gene, ct, BASELINE_GROUP), np.nan)
+            mb = mean_expr.get((gene, ct, BASELINE_GROUP), np.nan)
+            okb = in_panel and n_b >= min_cells
+            rows.append({
+                'segment': segment, 'gene': gene, 'in_panel': in_panel,
+                'cell_type': ct, 'contrast': BASELINE_LABEL, 'test': BASELINE_GROUP,
+                'reference': '', 'n_test_cells': int(n_b),
+                'frac_pos_test': (float(fb) if okb and not pd.isna(fb) else np.nan),
+                'pct_pos_test': (float(fb) * 100.0 if okb and not pd.isna(fb) else np.nan),
+                'log2FC': np.nan,
+                'mean_expr': (float(mb) if okb and not pd.isna(mb) else np.nan),
+            })
+            # --- fold-change columns (colour = Wilcoxon log2FC) ---
             for test, ref, lab in CONTRASTS:
                 n_t = n_cells.get((ct, test), 0)
                 fv = frac_pos.get((gene, ct, test), np.nan)
@@ -161,14 +184,21 @@ def build_table(genes, frac_pos, n_cells, present, lfc_lut, min_cells,
                     'frac_pos_test': (float(fv) if ok and not pd.isna(fv) else np.nan),
                     'pct_pos_test': (float(fv) * 100.0 if ok and not pd.isna(fv) else np.nan),
                     'log2FC': (float(lfc) if ok and not pd.isna(lfc) else np.nan),
+                    'mean_expr': np.nan,
                 })
     return pd.DataFrame(rows)
 
 
 # --------------------------- drawing ----------------------------------------
+# baseline column geometry: the H2O_veh control sits to the LEFT of the
+# fold-change columns, separated by a small gap + divider line.
+BASE_X = -1.5          # x position of the baseline column
+BASE_GAP = -0.75       # x of the divider between baseline and FC columns
+
+
 def draw(df, genes, panel_counts, norm, cmap, vmin, vmax, present, title,
-         out_png, out_pdf, gene_fs=8.5, col_fs=8.0, panel_fs=11.0,
-         size_scale=1.0):
+         out_png, out_pdf, base_norm, base_cmap, gene_fs=8.5, col_fs=8.0,
+         panel_fs=11.0, size_scale=1.0):
     n = len(genes)
     y_of = {g: i for i, g in enumerate(genes)}
     ncol = len(CONTRASTS)
@@ -177,7 +207,7 @@ def draw(df, genes, panel_counts, norm, cmap, vmin, vmax, present, title,
     def sz(frac):
         return size_of(frac) * size_scale
 
-    fig_w = 2.6 + len(PANELS) * (0.52 * ncol + 0.6)
+    fig_w = 3.2 + len(PANELS) * (0.52 * (ncol + 1) + 0.6)
     fig_h = max(6.0, 0.32 * n + 2.4)
     fig, axes = plt.subplots(1, len(PANELS), figsize=(fig_w, fig_h), sharey=True,
                              gridspec_kw={'wspace': 0.16})
@@ -197,17 +227,28 @@ def draw(df, genes, panel_counts, norm, cmap, vmin, vmax, present, title,
         d = df[df['cell_type'] == ct]
         lut = {(r.gene, r.contrast): (r.frac_pos_test, r.log2FC)
                for r in d.itertuples(index=False)}
+        blut = {r.gene: (r.frac_pos_test, r.mean_expr)
+                for r in d[d['contrast'] == BASELINE_LABEL].itertuples(index=False)}
         for gene, yi in y_of.items():
+            # baseline dot: colour = mean expression in H2O_veh
+            fb, me = blut.get(gene, (np.nan, np.nan))
+            if not (pd.isna(fb) or pd.isna(me) or fb <= 0):
+                ax.scatter(BASE_X, yi, s=sz(fb), c=[me], cmap=base_cmap,
+                           norm=base_norm, edgecolor='black', linewidth=0.4,
+                           zorder=3)
+            # fold-change dots
             for j, (_t, _r, lab) in enumerate(CONTRASTS):
                 fv, lfc = lut.get((gene, lab), (np.nan, np.nan))
                 if pd.isna(fv) or pd.isna(lfc) or fv <= 0:
                     continue
                 ax.scatter(j, yi, s=sz(fv), c=[lfc], cmap=cmap, norm=norm,
                            edgecolor='black', linewidth=0.4, zorder=3)
-        ax.set_xlim(-0.6, ncol - 0.4)
+        ax.axvline(BASE_GAP, color='0.7', lw=1.0, linestyle=(0, (4, 3)), zorder=1)
+        ax.set_xlim(BASE_X - 0.6, ncol - 0.4)
         ax.set_ylim(n - 0.5, -0.5)
-        ax.set_xticks(range(ncol))
-        ax.set_xticklabels(col_labels, rotation=45, ha='right', va='top', fontsize=col_fs)
+        ax.set_xticks([BASE_X] + list(range(ncol)))
+        ax.set_xticklabels([BASELINE_LABEL] + col_labels, rotation=45,
+                           ha='right', va='top', fontsize=col_fs)
         ax.set_title(f'{ct}\n(n={panel_counts.get(ct, 0):,})',
                      fontsize=panel_fs, fontweight='bold', pad=10)
         ax.tick_params(length=0)
@@ -236,8 +277,8 @@ def draw(df, genes, panel_counts, norm, cmap, vmin, vmax, present, title,
         if not present_in_group:
             continue
         mid = block_start + (len(present_in_group) - 1) / 2.0
-        axes[0].text(-1.75, mid, lab, rotation=90, ha='center', va='center',
-                     fontsize=7.5, fontweight='bold', color='0.35',
+        axes[0].text(BASE_X - 1.25, mid, lab, rotation=90, ha='center',
+                     va='center', fontsize=7.5, fontweight='bold', color='0.35',
                      transform=axes[0].transData)
         block_start += len(present_in_group)
 
@@ -245,6 +286,11 @@ def draw(df, genes, panel_counts, norm, cmap, vmin, vmax, present, title,
     cbar = fig.colorbar(sm, ax=axes, fraction=0.024, pad=0.04, extend='both')
     cbar.set_label('Wilcoxon log2 fold change (test / H2O_veh)', fontsize=9)
     cbar.ax.tick_params(labelsize=8)
+
+    smb = plt.cm.ScalarMappable(cmap=base_cmap, norm=base_norm); smb.set_array([])
+    cbar2 = fig.colorbar(smb, ax=axes, fraction=0.024, pad=0.10, extend='max')
+    cbar2.set_label('baseline mean expr (H2O_veh, log-norm)', fontsize=9)
+    cbar2.ax.tick_params(labelsize=8)
 
     handles = [ax.scatter([], [], s=sz(f), c='0.55', edgecolor='black',
                           linewidth=0.4) for f in LEGEND_FRACS]
@@ -256,8 +302,9 @@ def draw(df, genes, panel_counts, norm, cmap, vmin, vmax, present, title,
 
     fig.suptitle(title, fontsize=12, fontweight='bold', y=0.998)
     fig.text(0.5, 0.972,
-             'dot size = % cells positive (test group) · colour = Wilcoxon log2FC, '
-             f'clipped [{vmin:g}, {vmax:g}]  ·  † = gene absent from panel',
+             'dot size = % cells positive · FC cols colour = Wilcoxon log2FC '
+             f'clipped [{vmin:g}, {vmax:g}] · baseline col colour = mean expr '
+             '· † = gene absent from panel',
              ha='center', va='top', fontsize=7.5, color='0.35')
 
     fig.savefig(out_png, dpi=300, bbox_inches='tight')
@@ -280,8 +327,8 @@ SEG_SUB = 'marker-gene typing · Wilcoxon'
 
 
 def draw_combined(df, genes, panel_counts, norm, cmap, vmin, vmax, present,
-                  out_png, out_pdf, gene_fs=9.0, col_fs=8.5, panel_fs=11.5,
-                  size_scale=1.6):
+                  out_png, out_pdf, base_norm, base_cmap, gene_fs=9.0,
+                  col_fs=8.0, panel_fs=11.5, size_scale=1.6):
     n = len(genes)
     y_of = {g: i for i, g in enumerate(genes)}
     ncol = len(CONTRASTS)
@@ -292,9 +339,9 @@ def draw_combined(df, genes, panel_counts, norm, cmap, vmin, vmax, present,
         return size_of(frac) * size_scale
 
     # extra gap between the two iteration halves (after panel index 1)
-    fig = plt.figure(figsize=(14.0, 7.1))
-    gs = fig.add_gridspec(1, npan, wspace=0.16,
-                          left=0.085, right=0.92, top=0.86, bottom=0.13)
+    fig = plt.figure(figsize=(16.0, 7.1))
+    gs = fig.add_gridspec(1, npan, wspace=0.14,
+                          left=0.105, right=0.90, top=0.86, bottom=0.14)
     axes = [fig.add_subplot(gs[0, k]) for k in range(npan)]
 
     sep_after, acc = [], 0
@@ -307,18 +354,27 @@ def draw_combined(df, genes, panel_counts, norm, cmap, vmin, vmax, present,
         d = df[(df['segment'] == seg) & (df['cell_type'] == ct)]
         lut = {(r.gene, r.contrast): (r.frac_pos_test, r.log2FC)
                for r in d.itertuples(index=False)}
+        blut = {r.gene: (r.frac_pos_test, r.mean_expr)
+                for r in d[d['contrast'] == BASELINE_LABEL].itertuples(index=False)}
         for gene, yi in y_of.items():
+            # baseline dot: colour = mean expression in H2O_veh
+            fb, me = blut.get(gene, (np.nan, np.nan))
+            if not (pd.isna(fb) or pd.isna(me) or fb <= 0):
+                ax.scatter(BASE_X, yi, s=sz(fb), c=[me], cmap=base_cmap,
+                           norm=base_norm, edgecolor='black', linewidth=0.4,
+                           zorder=3)
             for j, (_t, _r, lab) in enumerate(CONTRASTS):
                 fv, lfc = lut.get((gene, lab), (np.nan, np.nan))
                 if pd.isna(fv) or pd.isna(lfc) or fv <= 0:
                     continue
                 ax.scatter(j, yi, s=sz(fv), c=[lfc], cmap=cmap, norm=norm,
                            edgecolor='black', linewidth=0.4, zorder=3)
-        ax.set_xlim(-0.6, ncol - 0.4)
+        ax.axvline(BASE_GAP, color='0.7', lw=0.9, linestyle=(0, (3, 2)), zorder=1)
+        ax.set_xlim(BASE_X - 0.6, ncol - 0.4)
         ax.set_ylim(n - 0.5, -0.5)
-        ax.set_xticks(range(ncol))
-        ax.set_xticklabels(col_labels, rotation=45, ha='right', va='top',
-                           fontsize=col_fs)
+        ax.set_xticks([BASE_X] + list(range(ncol)))
+        ax.set_xticklabels([BASELINE_LABEL] + col_labels, rotation=45,
+                           ha='right', va='top', fontsize=col_fs)
         ax.set_title(f'{ct}\n(n={panel_counts.get((seg, ct), 0):,})',
                      fontsize=panel_fs, fontweight='bold', pad=8)
         ax.tick_params(length=0)
@@ -343,9 +399,9 @@ def draw_combined(df, genes, panel_counts, norm, cmap, vmin, vmax, present,
                 if not pg:
                     continue
                 mid = block_start + (len(pg) - 1) / 2.0
-                ax.text(-2.05, mid, lab, rotation=90, ha='center', va='center',
-                        fontsize=7.5, fontweight='bold', color='0.35',
-                        transform=ax.transData)
+                ax.text(BASE_X - 1.35, mid, lab, rotation=90, ha='center',
+                        va='center', fontsize=7.5, fontweight='bold',
+                        color='0.35', transform=ax.transData)
                 block_start += len(pg)
         else:
             ax.set_yticks([])
@@ -369,22 +425,27 @@ def draw_combined(df, genes, panel_counts, norm, cmap, vmin, vmax, present,
                      linestyle=(0, (4, 3))))
 
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm); sm.set_array([])
-    cbar = fig.colorbar(sm, ax=axes, fraction=0.018, pad=0.02, extend='both')
+    cbar = fig.colorbar(sm, ax=axes, fraction=0.016, pad=0.015, extend='both')
     cbar.set_label('Wilcoxon log2FC (test / H2O_veh)', fontsize=9)
     cbar.ax.tick_params(labelsize=8)
+
+    smb = plt.cm.ScalarMappable(cmap=base_cmap, norm=base_norm); smb.set_array([])
+    cbar2 = fig.colorbar(smb, ax=axes, fraction=0.016, pad=0.055, extend='max')
+    cbar2.set_label('baseline mean expr (H2O_veh, log-norm)', fontsize=9)
+    cbar2.ax.tick_params(labelsize=8)
 
     handles = [axes[0].scatter([], [], s=sz(f), c='0.55', edgecolor='black',
                                linewidth=0.4) for f in LEGEND_FRACS]
     labels = [f'{int(f * 100)}%' for f in LEGEND_FRACS]
     fig.legend(handles, labels, title='% cells\npositive',
-               loc='center left', bbox_to_anchor=(0.935, 0.28), frameon=False,
+               loc='center left', bbox_to_anchor=(0.945, 0.26), frameon=False,
                labelspacing=1.8, handletextpad=1.2, borderpad=0.8,
                fontsize=8, title_fontsize=8)
 
     fig.text(0.5, 0.025,
-             'dot size = % cells positive (test group) · colour = Wilcoxon '
-             f'log2FC, clipped [{vmin:g}, {vmax:g}] · contrasts all vs H2O_veh '
-             '· † = gene absent from panel',
+             'dot size = % cells positive · FC cols colour = Wilcoxon log2FC '
+             f'clipped [{vmin:g}, {vmax:g}] · leftmost "H2O_veh baseline" col '
+             'colour = mean expr · all FC contrasts vs H2O_veh · † = absent',
              ha='center', va='center', fontsize=8, color='0.35')
 
     fig.savefig(out_png, dpi=300, bbox_inches='tight')
@@ -422,6 +483,10 @@ def main():
     ap.add_argument('--vmin', type=float, default=-1.0)
     ap.add_argument('--vmax', type=float, default=1.0)
     ap.add_argument('--cmap', default='RdBu_r')
+    ap.add_argument('--baseline-cmap', default='viridis',
+                    help='sequential cmap for the H2O_veh baseline column '
+                         '(mean expression); kept distinct from the diverging '
+                         'fold-change cmap')
     ap.add_argument('--min-cells', type=int, default=10)
     ap.add_argument('--outdir', required=True, type=Path)
     ap.add_argument('--date', default=date.today().isoformat())
@@ -448,7 +513,15 @@ def main():
     genes = list(dict.fromkeys(args.genes))
     norm = Normalize(vmin=args.vmin, vmax=args.vmax, clip=True)
     cmap = plt.get_cmap(args.cmap)
+    base_cmap = plt.get_cmap(args.baseline_cmap)
     rng = f'{fmt(args.vmin)}to{fmt(args.vmax)}'
+
+    def baseline_norm_from(df):
+        vals = df['mean_expr'].dropna().values
+        bvmax = float(np.nanpercentile(vals, 99)) if vals.size else 1.0
+        if not np.isfinite(bvmax) or bvmax <= 0:
+            bvmax = 1.0
+        return Normalize(vmin=0.0, vmax=bvmax, clip=True)
 
     if args.mode == 'combined':
         req = ['slide_a_dir', 'slide_b_dir', 'slide_a_ann', 'slide_b_ann',
@@ -468,13 +541,14 @@ def main():
             logging.info('=== combined: loading %s ===', seg)
             adata = load_fn(args)
             lfc_lut = lut_fn()
-            frac_pos, n_cells, present = frac_positive(adata, genes)
+            frac_pos, mean_expr, n_cells, present = frac_positive(adata, genes)
             present_all |= present
             for ct in PANELS:
                 panel_counts[(seg, ct)] = sum(n_cells.get((ct, g), 0)
                                               for g in GROUPS)
-            tables.append(build_table(genes, frac_pos, n_cells, present,
-                                      lfc_lut, args.min_cells, segment=seg))
+            tables.append(build_table(genes, frac_pos, mean_expr, n_cells,
+                                      present, lfc_lut, args.min_cells,
+                                      segment=seg))
             del adata
         df = pd.concat(tables, ignore_index=True)
         absent = [g for g in genes if g not in present_all]
@@ -487,7 +561,8 @@ def main():
         logging.info('Wrote %s.csv', base)
         draw_combined(df, genes, panel_counts, norm, cmap, args.vmin, args.vmax,
                       present_all, args.outdir / f'{base}.png',
-                      args.outdir / f'{base}.pdf')
+                      args.outdir / f'{base}.pdf',
+                      baseline_norm_from(df), base_cmap)
         logging.info('Wrote %s.png | .pdf', base)
         logging.info('Done (combined). %d genes (%d absent).',
                      len(genes), len(absent))
@@ -513,15 +588,15 @@ def main():
         title = 'Neuron vs Astrocyte — NUCLEUS-ONLY iteration (dot plot)'
         seg = 'NucleusOnly'
 
-    frac_pos, n_cells, present = frac_positive(adata, genes)
+    frac_pos, mean_expr, n_cells, present = frac_positive(adata, genes)
     absent = [g for g in genes if g not in present]
     if absent:
         logging.warning('Genes not in panel: %s', absent)
     panel_counts = {ct: sum(n_cells.get((ct, g), 0) for g in GROUPS) for ct in PANELS}
     logging.info('panel cell counts (contrast groups): %s', panel_counts)
 
-    df = build_table(genes, frac_pos, n_cells, present, lfc_lut, args.min_cells,
-                     segment=seg)
+    df = build_table(genes, frac_pos, mean_expr, n_cells, present, lfc_lut,
+                     args.min_cells, segment=seg)
 
     base = (f'CelltypeIteration_Dotplot_NeuronAstro_{seg}_Wilcoxon_'
             f'{args.cmap}_{rng}_{len(genes)}gene-{args.date}')
@@ -532,7 +607,7 @@ def main():
     out_png = args.outdir / f'{base}.png'
     out_pdf = args.outdir / f'{base}.pdf'
     draw(df, genes, panel_counts, norm, cmap, args.vmin, args.vmax, present,
-         title, out_png, out_pdf)
+         title, out_png, out_pdf, baseline_norm_from(df), base_cmap)
     logging.info('Wrote %s | %s', out_png.name, out_pdf.name)
     logging.info('Done. %d genes (%d absent), colourbar [%g, %g].',
                  len(genes), len(absent), args.vmin, args.vmax)
