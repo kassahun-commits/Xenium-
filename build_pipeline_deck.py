@@ -544,6 +544,12 @@ def main():
     ap.add_argument('--spatial-pdf', default=None,
                     help='optional: leiden spatial-cluster PDF '
                          '(WholeCell_V1_10x_spatial_clusters)')
+    ap.add_argument('--wc-dotplot-pdf', default=None,
+                    help='optional: whole-cell Neuron/Astrocyte iteration dot '
+                         'plot PDF (CelltypeIteration_Dotplot..._WholeCell...)')
+    ap.add_argument('--nuc-dotplot-pdf', default=None,
+                    help='optional: nucleus-only Neuron/Astrocyte iteration dot '
+                         'plot PDF (CelltypeIteration_Dotplot..._NucleusOnly...)')
     ap.add_argument('--date', default='2026-06-09')
     args = ap.parse_args()
 
@@ -567,6 +573,16 @@ def main():
         print('[fig] rendering leiden UMAP + spatial maps from PDF...')
         render_pdf_png(args.umap_pdf, leiden_umap_png)
         render_pdf_png(args.spatial_pdf, leiden_spatial_png)
+
+    wc_dot_png = nuc_dot_png = None
+    if args.wc_dotplot_pdf and Path(args.wc_dotplot_pdf).exists():
+        wc_dot_png = assets / 'dotplot_wholecell.png'
+        print('[fig] rendering whole-cell iteration dot plot from PDF...')
+        render_pdf_png(args.wc_dotplot_pdf, wc_dot_png, dpi=300)
+    if args.nuc_dotplot_pdf and Path(args.nuc_dotplot_pdf).exists():
+        nuc_dot_png = assets / 'dotplot_nucleus.png'
+        print('[fig] rendering nucleus-only iteration dot plot from PDF...')
+        render_pdf_png(args.nuc_dotplot_pdf, nuc_dot_png, dpi=300)
 
     nuc_sig_png = None
     if args.nuc_pb_csv and args.nuc_wx_csv:
@@ -958,6 +974,51 @@ def main():
             'The inflation is pseudoreplication, not a property of the segmentation — '
             'pseudobulk stays the reviewer-defensible primary analysis.',
             size=13.5, color=NAVY)
+
+    # ---- Slide 7d/7e: Neuron vs Astrocyte dot plots, one per segmentation iteration ----
+    def add_dotplot_slide(png, seg_label, tag, tag_color, lead):
+        s = add_blank(prs)
+        slide_header(
+            s, prs, 'Curated gene panel — Neuron vs Astrocyte dot plot',
+            f'{seg_label}: dot size = % cells positive · colour = Wilcoxon '
+            'log2FC (clipped ±1) · all contrasts vs H2O_veh',
+            tag=tag, tag_color=tag_color)
+        # tall portrait figure on the left
+        s.shapes.add_picture(str(png), Inches(0.4), Inches(1.3),
+                             height=Inches(5.95))
+        chip(s, 4.55, 1.45, 8.3, 0.5, 'How to read it', PURPLE, size=14)
+        bullets(s, 4.6, 2.1, 8.25, 3.6, [
+            (0, 'Two panels = the two cell types; four columns = the four '
+                'treatment contrasts (all vs H2O_veh).', NAVY, True),
+            (0, 'Dot SIZE = % of cells in the test group expressing the gene '
+                '(detection frequency).', NAVY),
+            (0, 'Dot COLOUR = Wilcoxon log2 fold change vs H2O_veh — red up, '
+                'blue down, clipped at ±1.', NAVY),
+            (0, 'Rows are grouped: neuronal markers, astrocyte markers, '
+                'activity/receptor genes, acetyl-CoA/chromatin enzymes, and '
+                'other alcohol-related genes.', GRAY),
+            (0, 'Sanity check: neuronal markers light up (big dots) in the '
+                'Neuron panel, astrocyte markers in the Astrocyte panel.', GREEN,
+                True),
+        ], size=13)
+        txt(s, 4.6, 5.95, 8.25, 1.35, lead, size=13, color=AMBER, bold=True)
+        return s
+
+    if wc_dot_png is not None:
+        add_dotplot_slide(
+            wc_dot_png, 'WHOLE-CELL iteration',
+            'Whole-cell · Neuron vs Astrocyte', TEAL,
+            'Whole-cell counts pick up the strong acute-ethanol signal — e.g. '
+            'Grin2d is up in neurons under EtOH. Compare this panel head-to-head '
+            'with the nucleus-only version on the next slide.')
+    if nuc_dot_png is not None:
+        add_dotplot_slide(
+            nuc_dot_png, 'NUCLEUS-ONLY iteration',
+            'Nucleus-only · Neuron vs Astrocyte', NUCP,
+            'Same genes, same axes, nucleus-only segmentation (the iteration '
+            'with a single DE version — Wilcoxon). Dots are generally smaller '
+            '(fewer transcripts per nucleus) and fold changes are muted versus '
+            'whole-cell — the cost of counting only the nucleus.')
 
     # ---- Slide 7b: does the cell-typing method change DE? (one per --compare) ----
     for spec in args.compare:
