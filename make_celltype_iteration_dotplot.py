@@ -67,9 +67,10 @@ GROUPS = sorted(set([t for t, _r, _l in CONTRASTS] + [r for _t, r, _l in CONTRAS
 
 # curated gene panel, grouped top->bottom; group boundaries drive separators
 GENE_GROUPS = [
+    ('Gene of interest',   ['Grin2d']),
     ('Neuronal markers',   ['Rbfox3', 'Snap25', 'Syn1', 'Stmn2', 'Map2', 'Tubb3']),
     ('Astrocyte markers',  ['Gfap', 'Aqp4', 'Slc1a3', 'Aldh1l1', 'S100b', 'Aldoc', 'Gja1']),
-    ('Activity / receptors', ['Grin2d', 'Oprm1', 'Bdnf', 'Arc', 'Egr1', 'Fos']),
+    ('Activity / receptors', ['Oprm1', 'Bdnf', 'Arc', 'Egr1', 'Fos']),
     ('Acetyl-CoA / chromatin', ['Acss1', 'Acss2', 'Acly', 'Kat2a', 'Kat2b', 'Ep300',
                                 'Kat5', 'Crebbp', 'Hdac1', 'Hdac2', 'Hdac3']),
     ('Alcohol-related',    ['Gabra1', 'Gabra2', 'Gabbr1', 'Grin1', 'Grin2a', 'Grin2b',
@@ -142,7 +143,8 @@ def lfc_lookup_nucleus(csv):
 
 
 # --------------------------- build table ------------------------------------
-def build_table(genes, frac_pos, n_cells, present, lfc_lut, min_cells):
+def build_table(genes, frac_pos, n_cells, present, lfc_lut, min_cells,
+                segment=None):
     rows = []
     for gene in genes:
         in_panel = gene in present
@@ -153,9 +155,9 @@ def build_table(genes, frac_pos, n_cells, present, lfc_lut, min_cells):
                 lfc = lfc_lut.get((gene, ct, test), np.nan)
                 ok = in_panel and n_t >= min_cells
                 rows.append({
-                    'gene': gene, 'in_panel': in_panel, 'cell_type': ct,
-                    'contrast': lab, 'test': test, 'reference': ref,
-                    'n_test_cells': int(n_t),
+                    'segment': segment, 'gene': gene, 'in_panel': in_panel,
+                    'cell_type': ct, 'contrast': lab, 'test': test,
+                    'reference': ref, 'n_test_cells': int(n_t),
                     'frac_pos_test': (float(fv) if ok and not pd.isna(fv) else np.nan),
                     'pct_pos_test': (float(fv) * 100.0 if ok and not pd.isna(fv) else np.nan),
                     'log2FC': (float(lfc) if ok and not pd.isna(lfc) else np.nan),
@@ -263,6 +265,133 @@ def draw(df, genes, panel_counts, norm, cmap, vmin, vmax, present, title,
     plt.close(fig)
 
 
+# --------------------------- combined drawing -------------------------------
+# 4-panel side-by-side figure: genes listed ONCE on the left, then
+# [whole-cell Neuron | whole-cell Astro] [nucleus Neuron | nucleus Astro].
+# Sharing the gene axis lets the dots be much larger. Both iterations are
+# marker-gene typed (per-cell score_genes -> argmax) and coloured by Wilcoxon
+# log2FC, so the only thing that changes across the two halves is segmentation.
+COMBINED_PANELS = [
+    ('WholeCell', 'Neuron'), ('WholeCell', 'Astrocyte'),
+    ('NucleusOnly', 'Neuron'), ('NucleusOnly', 'Astrocyte'),
+]
+SEG_TITLE = {'WholeCell': 'WHOLE-CELL', 'NucleusOnly': 'NUCLEUS-ONLY'}
+SEG_SUB = 'marker-gene typing · Wilcoxon'
+
+
+def draw_combined(df, genes, panel_counts, norm, cmap, vmin, vmax, present,
+                  out_png, out_pdf, gene_fs=9.0, col_fs=8.5, panel_fs=11.5,
+                  size_scale=1.6):
+    n = len(genes)
+    y_of = {g: i for i, g in enumerate(genes)}
+    ncol = len(CONTRASTS)
+    col_labels = [lab for _t, _r, lab in CONTRASTS]
+    npan = len(COMBINED_PANELS)
+
+    def sz(frac):
+        return size_of(frac) * size_scale
+
+    # extra gap between the two iteration halves (after panel index 1)
+    fig = plt.figure(figsize=(14.0, 7.1))
+    gs = fig.add_gridspec(1, npan, wspace=0.16,
+                          left=0.085, right=0.92, top=0.86, bottom=0.13)
+    axes = [fig.add_subplot(gs[0, k]) for k in range(npan)]
+
+    sep_after, acc = [], 0
+    for _lab, gl in GENE_GROUPS:
+        acc += len([g for g in gl if g in genes])
+        sep_after.append(acc - 0.5)
+    sep_after = sep_after[:-1]
+
+    for k, (ax, (seg, ct)) in enumerate(zip(axes, COMBINED_PANELS)):
+        d = df[(df['segment'] == seg) & (df['cell_type'] == ct)]
+        lut = {(r.gene, r.contrast): (r.frac_pos_test, r.log2FC)
+               for r in d.itertuples(index=False)}
+        for gene, yi in y_of.items():
+            for j, (_t, _r, lab) in enumerate(CONTRASTS):
+                fv, lfc = lut.get((gene, lab), (np.nan, np.nan))
+                if pd.isna(fv) or pd.isna(lfc) or fv <= 0:
+                    continue
+                ax.scatter(j, yi, s=sz(fv), c=[lfc], cmap=cmap, norm=norm,
+                           edgecolor='black', linewidth=0.4, zorder=3)
+        ax.set_xlim(-0.6, ncol - 0.4)
+        ax.set_ylim(n - 0.5, -0.5)
+        ax.set_xticks(range(ncol))
+        ax.set_xticklabels(col_labels, rotation=45, ha='right', va='top',
+                           fontsize=col_fs)
+        ax.set_title(f'{ct}\n(n={panel_counts.get((seg, ct), 0):,})',
+                     fontsize=panel_fs, fontweight='bold', pad=8)
+        ax.tick_params(length=0)
+        for sp in ax.spines.values():
+            sp.set_visible(False)
+        ax.set_axisbelow(True)
+        ax.grid(color='0.93', lw=0.5, zorder=0)
+        for ys in sep_after:
+            ax.axhline(ys, color='0.80', lw=0.8, zorder=1)
+        if k == 0:
+            ylabels, ycolors = [], []
+            for g in genes:
+                ylabels.append(g if g in present else g + ' †')
+                ycolors.append('black' if g in present else '0.6')
+            ax.set_yticks(range(n))
+            ax.set_yticklabels(ylabels, fontsize=gene_fs, fontstyle='italic')
+            for tick, col in zip(ax.get_yticklabels(), ycolors):
+                tick.set_color(col)
+            block_start = 0
+            for lab, gl in GENE_GROUPS:
+                pg = [g for g in gl if g in genes]
+                if not pg:
+                    continue
+                mid = block_start + (len(pg) - 1) / 2.0
+                ax.text(-2.05, mid, lab, rotation=90, ha='center', va='center',
+                        fontsize=7.5, fontweight='bold', color='0.35',
+                        transform=ax.transData)
+                block_start += len(pg)
+        else:
+            ax.set_yticks([])
+
+    # iteration super-headers spanning each pair of panels (figure coords)
+    for seg, k0, k1 in [('WholeCell', 0, 1), ('NucleusOnly', 2, 3)]:
+        b0 = axes[k0].get_position(); b1 = axes[k1].get_position()
+        xc = (b0.x0 + b1.x1) / 2.0
+        color = '#0E7C86' if seg == 'WholeCell' else '#8E44AD'
+        fig.text(xc, 0.965, SEG_TITLE[seg], ha='center', va='center',
+                 fontsize=15, fontweight='bold', color=color)
+        fig.text(xc, 0.928, SEG_SUB, ha='center', va='center',
+                 fontsize=9, color='0.4')
+        fig.lines.append(plt.Line2D([b0.x0, b1.x1], [0.915, 0.915],
+                         transform=fig.transFigure, color=color, lw=2.0))
+
+    # divider between the two halves
+    xmid = (axes[1].get_position().x1 + axes[2].get_position().x0) / 2.0
+    fig.lines.append(plt.Line2D([xmid, xmid], [0.13, 0.90],
+                     transform=fig.transFigure, color='0.75', lw=1.0,
+                     linestyle=(0, (4, 3))))
+
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm); sm.set_array([])
+    cbar = fig.colorbar(sm, ax=axes, fraction=0.018, pad=0.02, extend='both')
+    cbar.set_label('Wilcoxon log2FC (test / H2O_veh)', fontsize=9)
+    cbar.ax.tick_params(labelsize=8)
+
+    handles = [axes[0].scatter([], [], s=sz(f), c='0.55', edgecolor='black',
+                               linewidth=0.4) for f in LEGEND_FRACS]
+    labels = [f'{int(f * 100)}%' for f in LEGEND_FRACS]
+    fig.legend(handles, labels, title='% cells\npositive',
+               loc='center left', bbox_to_anchor=(0.935, 0.28), frameon=False,
+               labelspacing=1.8, handletextpad=1.2, borderpad=0.8,
+               fontsize=8, title_fontsize=8)
+
+    fig.text(0.5, 0.025,
+             'dot size = % cells positive (test group) · colour = Wilcoxon '
+             f'log2FC, clipped [{vmin:g}, {vmax:g}] · contrasts all vs H2O_veh '
+             '· † = gene absent from panel',
+             ha='center', va='center', fontsize=8, color='0.35')
+
+    fig.savefig(out_png, dpi=300, bbox_inches='tight')
+    fig.savefig(out_pdf, bbox_inches='tight')
+    plt.close(fig)
+
+
 # --------------------------- data loaders -----------------------------------
 def load_wholecell(args):
     """Reuse the tracked V1 dot-plot loaders + marker celltyping verbatim, so
@@ -287,7 +416,8 @@ def fmt(v):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--mode', required=True, choices=['wholecell', 'nucleus'])
+    ap.add_argument('--mode', required=True,
+                    choices=['wholecell', 'nucleus', 'combined'])
     ap.add_argument('--genes', nargs='+', default=DEFAULT_GENES)
     ap.add_argument('--vmin', type=float, default=-1.0)
     ap.add_argument('--vmax', type=float, default=1.0)
@@ -316,6 +446,52 @@ def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
     args.outdir.mkdir(parents=True, exist_ok=True)
     genes = list(dict.fromkeys(args.genes))
+    norm = Normalize(vmin=args.vmin, vmax=args.vmax, clip=True)
+    cmap = plt.get_cmap(args.cmap)
+    rng = f'{fmt(args.vmin)}to{fmt(args.vmax)}'
+
+    if args.mode == 'combined':
+        req = ['slide_a_dir', 'slide_b_dir', 'slide_a_ann', 'slide_b_ann',
+               'wholecell_de_csv', 'loader_script_dir', 'nucleus_h5ad',
+               'nucleus_de_csv']
+        for r in req:
+            if getattr(args, r) is None:
+                ap.error(f'--{r.replace("_", "-")} required for --mode combined')
+        tables, panel_counts, present_all = [], {}, set()
+        loaders = [
+            ('WholeCell', load_wholecell,
+             lambda: lfc_lookup_wholecell(args.wholecell_de_csv)),
+            ('NucleusOnly', load_nucleus,
+             lambda: lfc_lookup_nucleus(args.nucleus_de_csv)),
+        ]
+        for seg, load_fn, lut_fn in loaders:
+            logging.info('=== combined: loading %s ===', seg)
+            adata = load_fn(args)
+            lfc_lut = lut_fn()
+            frac_pos, n_cells, present = frac_positive(adata, genes)
+            present_all |= present
+            for ct in PANELS:
+                panel_counts[(seg, ct)] = sum(n_cells.get((ct, g), 0)
+                                              for g in GROUPS)
+            tables.append(build_table(genes, frac_pos, n_cells, present,
+                                      lfc_lut, args.min_cells, segment=seg))
+            del adata
+        df = pd.concat(tables, ignore_index=True)
+        absent = [g for g in genes if g not in present_all]
+        if absent:
+            logging.warning('Genes not in either panel: %s', absent)
+        logging.info('panel cell counts: %s', panel_counts)
+        base = (f'CelltypeIteration_Dotplot_NeuronAstro_Combined_Wilcoxon_'
+                f'{args.cmap}_{rng}_{len(genes)}gene-{args.date}')
+        df.to_csv(args.outdir / f'{base}.csv', index=False)
+        logging.info('Wrote %s.csv', base)
+        draw_combined(df, genes, panel_counts, norm, cmap, args.vmin, args.vmax,
+                      present_all, args.outdir / f'{base}.png',
+                      args.outdir / f'{base}.pdf')
+        logging.info('Wrote %s.png | .pdf', base)
+        logging.info('Done (combined). %d genes (%d absent).',
+                     len(genes), len(absent))
+        return
 
     if args.mode == 'wholecell':
         for req in ['slide_a_dir', 'slide_b_dir', 'slide_a_ann', 'slide_b_ann',
@@ -344,17 +520,15 @@ def main():
     panel_counts = {ct: sum(n_cells.get((ct, g), 0) for g in GROUPS) for ct in PANELS}
     logging.info('panel cell counts (contrast groups): %s', panel_counts)
 
-    df = build_table(genes, frac_pos, n_cells, present, lfc_lut, args.min_cells)
+    df = build_table(genes, frac_pos, n_cells, present, lfc_lut, args.min_cells,
+                     segment=seg)
 
-    rng = f'{fmt(args.vmin)}to{fmt(args.vmax)}'
     base = (f'CelltypeIteration_Dotplot_NeuronAstro_{seg}_Wilcoxon_'
             f'{args.cmap}_{rng}_{len(genes)}gene-{args.date}')
     csv_path = args.outdir / f'{base}.csv'
     df.to_csv(csv_path, index=False)
     logging.info('Wrote %s', csv_path.name)
 
-    norm = Normalize(vmin=args.vmin, vmax=args.vmax, clip=True)
-    cmap = plt.get_cmap(args.cmap)
     out_png = args.outdir / f'{base}.png'
     out_pdf = args.outdir / f'{base}.pdf'
     draw(df, genes, panel_counts, norm, cmap, args.vmin, args.vmax, present,
