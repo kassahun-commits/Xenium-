@@ -101,6 +101,50 @@ def group_mean_expr(adata_ct, genes):
     return pd.DataFrame(cols, index=genes)[GROUP_ORDER]
 
 
+def draw_fc_bars(ax, fc, title, lfc, padj, clip=8.0):
+    """Grouped horizontal bars: OE-vs-ctrl and CM-vs-ctrl log2FC per gene."""
+    fc = fc.sort_values('OE_lfc').reset_index(drop=True)  # asc -> biggest on top
+    y = np.arange(len(fc))
+    oe = fc['OE_lfc'].clip(-clip, clip)
+    cm = fc['CM_lfc'].clip(-clip, clip)
+    oe_sig = (fc['OE_lfc'].abs() >= lfc) & (fc['OE_padj'] < padj)
+    cm_sig = (fc['CM_lfc'].abs() >= lfc) & (fc['CM_padj'] < padj)
+    oe_bars = ax.barh(y + 0.2, oe, height=0.4, color='#2C7FB8',
+                      label='MAT2A_OE vs control')
+    cm_bars = ax.barh(y - 0.2, cm, height=0.4, color='#D95F0E',
+                      label='MAT2A_CM vs control')
+    # per-bar alpha: significant = opaque, non-significant = pale
+    for bar, sig in zip(oe_bars, oe_sig):
+        bar.set_alpha(0.95 if sig else 0.4)
+    for bar, sig in zip(cm_bars, cm_sig):
+        bar.set_alpha(0.95 if sig else 0.4)
+    ax.axvline(0, color='k', lw=0.6)
+    for x in (lfc, -lfc):
+        ax.axvline(x, ls='--', color='gray', lw=0.5, alpha=0.6)
+    ax.set_yticks(y)
+    labels = [(g + ' *') if src == 'forced' else g
+              for g, src in zip(fc['gene'], fc['source'])]
+    ax.set_yticklabels(labels, fontsize=4.5)
+    for tick, src in zip(ax.get_yticklabels(), fc['source']):
+        if src == 'forced':
+            tick.set_color('#2CA02C')
+    ax.set_ylim(-0.6, len(fc) - 0.4)
+    ax.set_xlim(-clip - 0.5, clip + 0.5)
+    ax.set_xlabel('log2 fold change vs H2O_veh', fontsize=8)
+    ax.tick_params(axis='x', labelsize=7)
+    # annotate bars whose true value was clipped
+    for i in range(len(fc)):
+        for val, off in ((fc['OE_lfc'][i], 0.2), (fc['CM_lfc'][i], -0.2)):
+            if abs(val) > clip:
+                ax.text(np.sign(val) * clip, y[i] + off, f' {val:.0f}',
+                        fontsize=4, va='center',
+                        ha='left' if val > 0 else 'right')
+    for s in ('top', 'right'):
+        ax.spines[s].set_visible(False)
+    ax.set_title(title, fontsize=10, fontweight='bold')
+    ax.legend(fontsize=7, loc='lower right', frameon=False)
+
+
 def draw_heatmap(ax, z, genes, sources, title):
     im = ax.imshow(z.values, aspect='auto', cmap='RdBu_r', vmin=-2, vmax=2)
     ax.set_xticks(range(len(GROUP_ORDER)))
@@ -159,7 +203,7 @@ def main():
     say(adata.obs.loc[keep].groupby(
         ['group', 'celltype'], observed=True).size().to_string())
 
-    de_rows, overlap_rows, hm_pages = [], [], []
+    de_rows, overlap_rows, hm_pages, fc_pages = [], [], [], []
     for ct in CELLTYPES:
         a = adata[adata.obs['celltype'].astype(str) == ct].copy()
         de = {}
@@ -241,6 +285,16 @@ def main():
         say(f'[{ct}] wrote {src_csv.name}  ({len(genes_o)} genes)')
         hm_pages.append((ct, z_o, genes_o, src_o, len(in_oe), len(in_cm)))
 
+        # fold-change bar data (same gene set)
+        oe_m = de['MAT2A_OE'].set_index('gene')
+        cm_m = de['MAT2A_CM'].set_index('gene')
+        fc = pd.DataFrame({'gene': genes_o, 'source': src_o})
+        fc['OE_lfc'] = oe_m.reindex(genes_o)['logfc'].values
+        fc['CM_lfc'] = cm_m.reindex(genes_o)['logfc'].values
+        fc['OE_padj'] = oe_m.reindex(genes_o)['padj'].values
+        fc['CM_padj'] = cm_m.reindex(genes_o)['padj'].values
+        fc_pages.append((ct, fc))
+
     # ---- write DE + overlap tables ----
     if de_rows:
         de_csv = args.out_dir / f'{args.label}_DE_OEvsH2O_CMvsH2O_{D}.csv'
@@ -280,6 +334,31 @@ def main():
                 pdf.savefig(fig, bbox_inches='tight')
                 plt.close(fig)
         say('wrote', pdf_out.name)
+
+    # ---- fold-change bar chart (two bars/gene: OE-vs-ctrl, CM-vs-ctrl) ----
+    if fc_pages:
+        fc_pdf = args.out_dir / f'{args.label}_FoldChangeBars_OE_CM_vs_H2O_{D}.pdf'
+        for ct, fc in fc_pages:
+            fc.to_csv(args.out_dir
+                      / f'{args.label}_FoldChangeBars_{ct}_source_{D}.csv',
+                      index=False)
+        with PdfPages(fc_pdf) as pdf:
+            for ct, fc in fc_pages:
+                h = max(4.0, 0.135 * len(fc) + 1.6)
+                fig, ax = plt.subplots(figsize=(6.0, h))
+                draw_fc_bars(ax, fc,
+                             f'{ct}: log2FC vs H2O_veh  (* = forced/construct '
+                             f'tag; pale bar = not significant)',
+                             LFC, PADJ)
+                fig.text(0.01, 0.005,
+                         'EXPLORATORY: MAT2A_OE = 1 ROI (n=1 mouse); '
+                         'cell-level Wilcoxon = pseudoreplication. '
+                         'Bars clipped at |log2FC|=8 (true value annotated).',
+                         fontsize=6, color='#888888')
+                plt.tight_layout(rect=[0, 0.02, 1, 1])
+                pdf.savefig(fig, bbox_inches='tight')
+                plt.close(fig)
+        say('wrote', fc_pdf.name)
 
     log.close()
 
