@@ -44,6 +44,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import Patch
+from matplotlib_venn import venn2, venn2_circles
 from scipy.cluster.hierarchy import linkage, leaves_list
 
 plt.rcParams['pdf.fonttype'] = 42
@@ -145,6 +146,31 @@ def draw_fc_bars(ax, fc, title, lfc, padj, clip=8.0):
     ax.legend(fontsize=7, loc='lower right', frameon=False)
 
 
+def draw_venn(ax, oe_set, cm_set, title):
+    """Two-circle Venn of OE-vs-ctrl and CM-vs-ctrl DE gene sets."""
+    only_oe = oe_set - cm_set
+    only_cm = cm_set - oe_set
+    shared = oe_set & cm_set
+    v = venn2([oe_set, cm_set],
+              set_labels=('MAT2A_OE\nvs control', 'MAT2A_CM\nvs control'),
+              set_colors=(SRC_COLOR['OE only'], SRC_COLOR['CM only']),
+              alpha=0.55, ax=ax)
+    # outline circles even when a region is empty
+    venn2_circles([oe_set, cm_set], ax=ax, lw=0.8, color='#555555')
+    for sid, n in (('10', len(only_oe)), ('01', len(only_cm)),
+                   ('11', len(shared))):
+        lbl = v.get_label_by_id(sid)
+        if lbl is not None:
+            lbl.set_text(str(n))
+            lbl.set_fontsize(11)
+            lbl.set_fontweight('bold')
+    for t in v.set_labels:
+        if t is not None:
+            t.set_fontsize(8)
+    ax.set_title(title, fontsize=10, fontweight='bold')
+    return only_oe, shared, only_cm
+
+
 def draw_heatmap(ax, z, genes, sources, title):
     im = ax.imshow(z.values, aspect='auto', cmap='RdBu_r', vmin=-2, vmax=2)
     ax.set_xticks(range(len(GROUP_ORDER)))
@@ -204,6 +230,7 @@ def main():
         ['group', 'celltype'], observed=True).size().to_string())
 
     de_rows, overlap_rows, hm_pages, fc_pages = [], [], [], []
+    venn_pages, venn_rows = [], []
     for ct in CELLTYPES:
         a = adata[adata.obs['celltype'].astype(str) == ct].copy()
         de = {}
@@ -242,6 +269,28 @@ def main():
         say(f'[{ct}] OVERLAP: OE_sig={len(oe)}, CM_sig={len(cm)}, '
             f'shared={len(shared)}, OE_only={len(oe-cm)}, CM_only={len(cm-oe)}, '
             f'Jaccard={jac:.3f}')
+
+        # ---- direction-split significant sets (for Venn) ----
+        def sig_dir(t, sign):
+            d = de[t]
+            m = (d['padj'] < PADJ) & ((d['logfc'] >= LFC) if sign > 0
+                                      else (d['logfc'] <= -LFC))
+            return set(d[m]['gene'])
+        dir_sets = {(t, s): sig_dir(t, s)
+                    for t in ('MAT2A_OE', 'MAT2A_CM') for s in (1, -1)}
+        venn_pages.append((ct, dir_sets))
+        for s, lbl in ((1, 'up'), (-1, 'down')):
+            o, c = dir_sets[('MAT2A_OE', s)], dir_sets[('MAT2A_CM', s)]
+            venn_rows.append({
+                'celltype': ct, 'direction': lbl,
+                'n_OE': len(o), 'n_CM': len(c),
+                'n_shared': len(o & c), 'n_OE_only': len(o - c),
+                'n_CM_only': len(c - o),
+                'shared_genes': ';'.join(sorted(o & c)),
+                'OE_only_genes': ';'.join(sorted(o - c)),
+                'CM_only_genes': ';'.join(sorted(c - o))})
+            say(f'[{ct}] {lbl.upper():4s}: OE={len(o)}, CM={len(c)}, '
+                f'shared={len(o & c)}, OE_only={len(o - c)}, CM_only={len(c - o)}')
 
         # ---- heatmap gene set: top-N sig from each contrast, union ----
         top_oe = top_sig(de['MAT2A_OE'], LFC, PADJ, N)
@@ -359,6 +408,33 @@ def main():
                 pdf.savefig(fig, bbox_inches='tight')
                 plt.close(fig)
         say('wrote', fc_pdf.name)
+
+    # ---- Venn diagrams (OE vs CM DE sets, split UP / DOWN per cell type) ----
+    if venn_rows:
+        venn_csv = args.out_dir / f'{args.label}_Venn_OE_CM_updown_{D}.csv'
+        pd.DataFrame(venn_rows).to_csv(venn_csv, index=False)
+        say('wrote', venn_csv.name)
+    if venn_pages:
+        venn_pdf = args.out_dir / f'{args.label}_Venn_OE_CM_updown_{D}.pdf'
+        with PdfPages(venn_pdf) as pdf:
+            for ct, dir_sets in venn_pages:
+                fig, axes = plt.subplots(1, 2, figsize=(9.0, 4.6))
+                for ax, (s, lbl) in zip(axes, ((1, 'UP'), (-1, 'DOWN'))):
+                    draw_venn(ax, dir_sets[('MAT2A_OE', s)],
+                              dir_sets[('MAT2A_CM', s)],
+                              f'{lbl}-regulated')
+                fig.suptitle(
+                    f'{ct}: DE gene overlap, OE vs CM (each vs H2O_veh)\n'
+                    f'|log2FC| >= {LFC:g}, padj < {PADJ:g}',
+                    fontsize=11, fontweight='bold')
+                fig.text(0.01, 0.01,
+                         'EXPLORATORY: MAT2A_OE = 1 ROI (n=1 mouse); '
+                         'cell-level Wilcoxon = pseudoreplication.',
+                         fontsize=6, color='#888888')
+                plt.tight_layout(rect=[0, 0.03, 1, 0.92])
+                pdf.savefig(fig, bbox_inches='tight')
+                plt.close(fig)
+        say('wrote', venn_pdf.name)
 
     log.close()
 
