@@ -152,7 +152,7 @@ BASELINE_LABEL = 'H2O_veh\nbaseline'
 
 
 def build_table(genes, frac_pos, mean_expr, n_cells, present, lfc_lut,
-                min_cells, segment=None):
+                min_cells, segment=None, contrasts=CONTRASTS):
     rows = []
     for gene in genes:
         in_panel = gene in present
@@ -172,7 +172,7 @@ def build_table(genes, frac_pos, mean_expr, n_cells, present, lfc_lut,
                 'mean_expr': (float(mb) if okb and not pd.isna(mb) else np.nan),
             })
             # --- fold-change columns (colour = Wilcoxon log2FC) ---
-            for test, ref, lab in CONTRASTS:
+            for test, ref, lab in contrasts:
                 n_t = n_cells.get((ct, test), 0)
                 fv = frac_pos.get((gene, ct, test), np.nan)
                 lfc = lfc_lut.get((gene, ct, test), np.nan)
@@ -198,7 +198,7 @@ BASE_GAP = -0.75       # x of the divider between baseline and FC columns
 
 def draw(df, genes, panel_counts, norm, cmap, vmin, vmax, present, title,
          out_png, out_pdf, base_norm, base_cmap, gene_fs=8.5, col_fs=8.0,
-         panel_fs=11.0, size_scale=1.0):
+         panel_fs=11.0, size_scale=0.8):
     n = len(genes)
     y_of = {g: i for i, g in enumerate(genes)}
     ncol = len(CONTRASTS)
@@ -270,18 +270,6 @@ def draw(df, genes, panel_counts, norm, cmap, vmin, vmax, present, title,
     for tick, col in zip(axes[0].get_yticklabels(), ycolors):
         tick.set_color(col)
 
-    # category labels down the far left
-    block_start = 0
-    for lab, gl in GENE_GROUPS:
-        present_in_group = [g for g in gl if g in genes]
-        if not present_in_group:
-            continue
-        mid = block_start + (len(present_in_group) - 1) / 2.0
-        axes[0].text(BASE_X - 1.25, mid, lab, rotation=90, ha='center',
-                     va='center', fontsize=7.5, fontweight='bold', color='0.35',
-                     transform=axes[0].transData)
-        block_start += len(present_in_group)
-
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm); sm.set_array([])
     cbar = fig.colorbar(sm, ax=axes, fraction=0.024, pad=0.04, extend='both')
     cbar.set_label('Wilcoxon log2 fold change (test / H2O_veh)', fontsize=9)
@@ -313,35 +301,41 @@ def draw(df, genes, panel_counts, norm, cmap, vmin, vmax, present, title,
 
 
 # --------------------------- combined drawing -------------------------------
-# 4-panel side-by-side figure: genes listed ONCE on the left, then
-# [whole-cell Neuron | whole-cell Astro] [nucleus Neuron | nucleus Astro].
-# Sharing the gene axis lets the dots be much larger. Both iterations are
-# marker-gene typed (per-cell score_genes -> argmax) and coloured by Wilcoxon
-# log2FC, so the only thing that changes across the two halves is segmentation.
+# Generic 4-panel side-by-side figure: genes listed ONCE on the left, then
+# two HALVES of two cell-type panels each. Sharing the gene axis lets the dots
+# be large. Used for both:
+#   * segmentation compare : whole-cell  vs nucleus-only   (same QC, same typing)
+#   * pipeline    compare  : V1 DE QC    vs 10X workshop QC (same marker typing)
+# In every case dot colour = Wilcoxon log2FC and the only thing that changes
+# across the two halves is the named factor.
 COMBINED_PANELS = [
     ('WholeCell', 'Neuron'), ('WholeCell', 'Astrocyte'),
     ('NucleusOnly', 'Neuron'), ('NucleusOnly', 'Astrocyte'),
 ]
-SEG_TITLE = {'WholeCell': 'WHOLE-CELL', 'NucleusOnly': 'NUCLEUS-ONLY'}
-SEG_SUB = 'marker-gene typing · Wilcoxon'
+# half spec = (title, subtitle, colour, k0, k1) where k0..k1 are panel indices
+HALF_SPECS_SEG = [
+    ('WHOLE-CELL', 'marker-gene typing · Wilcoxon', '#0E7C86', 0, 1),
+    ('NUCLEUS-ONLY', 'marker-gene typing · Wilcoxon', '#8E44AD', 2, 3),
+]
 
 
 def draw_combined(df, genes, panel_counts, norm, cmap, vmin, vmax, present,
-                  out_png, out_pdf, base_norm, base_cmap, gene_fs=9.0,
-                  col_fs=8.0, panel_fs=11.5, size_scale=1.6):
+                  out_png, out_pdf, base_norm, base_cmap,
+                  panels=COMBINED_PANELS, contrasts=CONTRASTS,
+                  half_specs=HALF_SPECS_SEG, caption=None,
+                  gene_fs=9.0, col_fs=8.0, panel_fs=11.5, size_scale=1.28):
     n = len(genes)
     y_of = {g: i for i, g in enumerate(genes)}
-    ncol = len(CONTRASTS)
-    col_labels = [lab for _t, _r, lab in CONTRASTS]
-    npan = len(COMBINED_PANELS)
+    ncol = len(contrasts)
+    col_labels = [lab for _t, _r, lab in contrasts]
+    npan = len(panels)
 
     def sz(frac):
         return size_of(frac) * size_scale
 
-    # extra gap between the two iteration halves (after panel index 1)
-    fig = plt.figure(figsize=(16.0, 7.1))
+    fig = plt.figure(figsize=(16.0, 8.4))
     gs = fig.add_gridspec(1, npan, wspace=0.14,
-                          left=0.105, right=0.90, top=0.86, bottom=0.14)
+                          left=0.075, right=0.88, top=0.88, bottom=0.12)
     axes = [fig.add_subplot(gs[0, k]) for k in range(npan)]
 
     sep_after, acc = [], 0
@@ -350,7 +344,7 @@ def draw_combined(df, genes, panel_counts, norm, cmap, vmin, vmax, present,
         sep_after.append(acc - 0.5)
     sep_after = sep_after[:-1]
 
-    for k, (ax, (seg, ct)) in enumerate(zip(axes, COMBINED_PANELS)):
+    for k, (ax, (seg, ct)) in enumerate(zip(axes, panels)):
         d = df[(df['segment'] == seg) & (df['cell_type'] == ct)]
         lut = {(r.gene, r.contrast): (r.frac_pos_test, r.log2FC)
                for r in d.itertuples(index=False)}
@@ -363,7 +357,7 @@ def draw_combined(df, genes, panel_counts, norm, cmap, vmin, vmax, present,
                 ax.scatter(BASE_X, yi, s=sz(fb), c=[me], cmap=base_cmap,
                            norm=base_norm, edgecolor='black', linewidth=0.4,
                            zorder=3)
-            for j, (_t, _r, lab) in enumerate(CONTRASTS):
+            for j, (_t, _r, lab) in enumerate(contrasts):
                 fv, lfc = lut.get((gene, lab), (np.nan, np.nan))
                 if pd.isna(fv) or pd.isna(lfc) or fv <= 0:
                     continue
@@ -393,64 +387,76 @@ def draw_combined(df, genes, panel_counts, norm, cmap, vmin, vmax, present,
             ax.set_yticklabels(ylabels, fontsize=gene_fs, fontstyle='italic')
             for tick, col in zip(ax.get_yticklabels(), ycolors):
                 tick.set_color(col)
-            block_start = 0
-            for lab, gl in GENE_GROUPS:
-                pg = [g for g in gl if g in genes]
-                if not pg:
-                    continue
-                mid = block_start + (len(pg) - 1) / 2.0
-                ax.text(BASE_X - 1.35, mid, lab, rotation=90, ha='center',
-                        va='center', fontsize=7.5, fontweight='bold',
-                        color='0.35', transform=ax.transData)
-                block_start += len(pg)
         else:
             ax.set_yticks([])
 
-    # iteration super-headers spanning each pair of panels (figure coords)
-    for seg, k0, k1 in [('WholeCell', 0, 1), ('NucleusOnly', 2, 3)]:
+    # half super-headers spanning each pair of panels (figure coords)
+    for title, sub, color, k0, k1 in half_specs:
         b0 = axes[k0].get_position(); b1 = axes[k1].get_position()
         xc = (b0.x0 + b1.x1) / 2.0
-        color = '#0E7C86' if seg == 'WholeCell' else '#8E44AD'
-        fig.text(xc, 0.965, SEG_TITLE[seg], ha='center', va='center',
+        fig.text(xc, 0.965, title, ha='center', va='center',
                  fontsize=15, fontweight='bold', color=color)
-        fig.text(xc, 0.928, SEG_SUB, ha='center', va='center',
-                 fontsize=9, color='0.4')
+        fig.text(xc, 0.928, sub, ha='center', va='center',
+                 fontsize=8.5, color='0.4')
         fig.lines.append(plt.Line2D([b0.x0, b1.x1], [0.915, 0.915],
                          transform=fig.transFigure, color=color, lw=2.0))
 
     # divider between the two halves
-    xmid = (axes[1].get_position().x1 + axes[2].get_position().x0) / 2.0
+    mid = npan // 2
+    xmid = (axes[mid - 1].get_position().x1 + axes[mid].get_position().x0) / 2.0
     fig.lines.append(plt.Line2D([xmid, xmid], [0.13, 0.90],
                      transform=fig.transFigure, color='0.75', lw=1.0,
                      linestyle=(0, (4, 3))))
 
+    # ---- right-hand legends: two colorbars stacked + size legend below ----
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm); sm.set_array([])
-    cbar = fig.colorbar(sm, ax=axes, fraction=0.016, pad=0.015, extend='both')
-    cbar.set_label('Wilcoxon log2FC (test / H2O_veh)', fontsize=9)
+    cax1 = fig.add_axes([0.915, 0.58, 0.013, 0.29])
+    cbar = fig.colorbar(sm, cax=cax1, extend='both')
+    cbar.set_label('Wilcoxon log2FC\n(test / H2O_veh)', fontsize=8.5)
     cbar.ax.tick_params(labelsize=8)
 
     smb = plt.cm.ScalarMappable(cmap=base_cmap, norm=base_norm); smb.set_array([])
-    cbar2 = fig.colorbar(smb, ax=axes, fraction=0.016, pad=0.055, extend='max')
-    cbar2.set_label('baseline mean expr (H2O_veh, log-norm)', fontsize=9)
+    cax2 = fig.add_axes([0.915, 0.21, 0.013, 0.29])
+    cbar2 = fig.colorbar(smb, cax=cax2, extend='max')
+    cbar2.set_label('baseline mean expr\n(H2O_veh, log-norm)', fontsize=8.5)
     cbar2.ax.tick_params(labelsize=8)
 
     handles = [axes[0].scatter([], [], s=sz(f), c='0.55', edgecolor='black',
                                linewidth=0.4) for f in LEGEND_FRACS]
     labels = [f'{int(f * 100)}%' for f in LEGEND_FRACS]
     fig.legend(handles, labels, title='% cells\npositive',
-               loc='center left', bbox_to_anchor=(0.945, 0.26), frameon=False,
-               labelspacing=1.8, handletextpad=1.2, borderpad=0.8,
+               loc='upper left', bbox_to_anchor=(0.905, 0.17), frameon=False,
+               labelspacing=1.4, handletextpad=1.0, borderpad=0.6,
                fontsize=8, title_fontsize=8)
 
-    fig.text(0.5, 0.025,
-             'dot size = % cells positive · FC cols colour = Wilcoxon log2FC '
-             f'clipped [{vmin:g}, {vmax:g}] · leftmost "H2O_veh baseline" col '
-             'colour = mean expr · all FC contrasts vs H2O_veh · † = absent',
-             ha='center', va='center', fontsize=8, color='0.35')
+    if caption is None:
+        caption = ('dot size = % cells positive · FC cols colour = Wilcoxon '
+                   f'log2FC clipped [{vmin:g}, {vmax:g}] · leftmost "H2O_veh '
+                   'baseline" col colour = mean expr · † = gene absent')
+    fig.text(0.5, 0.025, caption, ha='center', va='center',
+             fontsize=8, color='0.35')
 
     fig.savefig(out_png, dpi=300, bbox_inches='tight')
     fig.savefig(out_pdf, bbox_inches='tight')
     plt.close(fig)
+
+
+# panels / halves / contrasts for the V1-DE-vs-10X pipeline comparison
+PIPELINE_PANELS = [
+    ('V1_DE', 'Neuron'), ('V1_DE', 'Astrocyte'),
+    ('TenX', 'Neuron'), ('TenX', 'Astrocyte'),
+]
+HALF_SPECS_PIPE = [
+    ('V1 DE pipeline', 'QC min_counts 10 · min_cells 5 · marker-typed',
+     '#0E7C86', 0, 1),
+    ('10X workshop pipeline',
+     'QC min_counts 20 · max 3405 · min_cells 100 · marker-typed',
+     '#B7791F', 2, 3),
+]
+PIPELINE_CONTRASTS = [
+    ('EtOH_veh',    'H2O_veh', 'EtOH/con'),
+    ('ChronicEtOH', 'H2O_veh', 'chronic/con'),
+]
 
 
 # --------------------------- data loaders -----------------------------------
@@ -469,6 +475,33 @@ def load_nucleus(args):
     return adata
 
 
+def load_10x(args):
+    """The 10X-workshop-QC'd whole-cell matrix (min_counts 20 / max 3405 /
+    min_cells 100), MARKER-gene typed with the SAME function as the V1-DE
+    half, so the only difference between the two halves is the QC. Reuses the
+    counts layer for % positive and the lognorm layer for scoring + baseline."""
+    sys.path.insert(0, str(args.loader_script_dir))
+    import build_DEgene_dotplot_fc_V1 as base  # noqa: E402
+    a = ad.read_h5ad(args.tenx_h5ad)
+    if 'lognorm' in a.layers:
+        a.X = a.layers['lognorm'].copy()
+    a = base.cell_type_data(a)   # adds obs['celltype'] Neuron/Astrocyte/...
+    return a
+
+
+def lfc_lookup_compare(test_csvs, method='marker-typed'):
+    """V1_celltyping_compare_Wilcoxon_<test>_vs_H2O_veh CSVs
+    (cols celltype, gene, logfc, padj, method). Pick one typing method;
+    key (gene, celltype, test) -> logfc."""
+    out = {}
+    for test, path in test_csvs.items():
+        d = pd.read_csv(path)
+        d = d[d['method'].astype(str) == method]
+        for r in d.itertuples(index=False):
+            out[(str(r.gene), str(r.celltype), str(test))] = float(r.logfc)
+    return out
+
+
 # --------------------------- main -------------------------------------------
 def fmt(v):
     return ('%g' % v).replace('-', 'neg').replace('.', 'p')
@@ -478,7 +511,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--mode', required=True,
-                    choices=['wholecell', 'nucleus', 'combined'])
+                    choices=['wholecell', 'nucleus', 'combined',
+                             'pipeline_compare'])
     ap.add_argument('--genes', nargs='+', default=DEFAULT_GENES)
     ap.add_argument('--vmin', type=float, default=-1.0)
     ap.add_argument('--vmax', type=float, default=1.0)
@@ -506,6 +540,17 @@ def main():
     ap.add_argument('--nucleus-h5ad', type=Path)
     ap.add_argument('--nucleus-de-csv', type=Path,
                     help='Nucleus_WilcoxonDE csv (cols celltype,comparison,gene,log2FoldChange)')
+    # 10X-pipeline inputs (mode=pipeline_compare)
+    ap.add_argument('--tenx-h5ad', type=Path,
+                    help='WholeCell_V1_10x_processed h5ad (10X workshop QC; '
+                         'layers counts+lognorm, obs group)')
+    ap.add_argument('--tenx-compare-csv', action='append', default=[],
+                    help='repeatable TEST=path to '
+                         'V1_celltyping_compare_Wilcoxon_<TEST>_vs_H2O_veh CSV '
+                         '(cols celltype,gene,logfc,method). One per contrast.')
+    ap.add_argument('--compare-method', default='marker-typed',
+                    help="which typing method to read from the 10X compare CSV "
+                         "(default 'marker-typed' so only QC differs)")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
@@ -565,6 +610,74 @@ def main():
                       baseline_norm_from(df), base_cmap)
         logging.info('Wrote %s.png | .pdf', base)
         logging.info('Done (combined). %d genes (%d absent).',
+                     len(genes), len(absent))
+        return
+
+    if args.mode == 'pipeline_compare':
+        req = ['slide_a_dir', 'slide_b_dir', 'slide_a_ann', 'slide_b_ann',
+               'wholecell_de_csv', 'loader_script_dir', 'tenx_h5ad']
+        for r in req:
+            if getattr(args, r) is None:
+                ap.error(f'--{r.replace("_", "-")} required for '
+                         '--mode pipeline_compare')
+        if not args.tenx_compare_csv:
+            ap.error('--tenx-compare-csv required (TEST=path) for '
+                     '--mode pipeline_compare')
+        tenx_csvs = {}
+        for spec in args.tenx_compare_csv:
+            if '=' not in spec:
+                ap.error(f'--tenx-compare-csv must be TEST=path, got: {spec}')
+            t, p = spec.split('=', 1)
+            tenx_csvs[t] = Path(p)
+        # restrict to contrasts that have a 10X compare table
+        contrasts = [c for c in PIPELINE_CONTRASTS if c[0] in tenx_csvs]
+        pgroups = sorted(set([t for t, _r, _l in contrasts] + ['H2O_veh']))
+        logging.info('pipeline_compare contrasts: %s',
+                     [c[2] for c in contrasts])
+
+        tables, panel_counts, present_all = [], {}, set()
+        loaders = [
+            ('V1_DE', load_wholecell,
+             lambda: lfc_lookup_wholecell(args.wholecell_de_csv)),
+            ('TenX', load_10x,
+             lambda: lfc_lookup_compare(tenx_csvs, args.compare_method)),
+        ]
+        for seg, load_fn, lut_fn in loaders:
+            logging.info('=== pipeline_compare: loading %s ===', seg)
+            adata = load_fn(args)
+            lfc_lut = lut_fn()
+            frac_pos, mean_expr, n_cells, present = frac_positive(adata, genes)
+            present_all |= present
+            for ct in PANELS:
+                panel_counts[(seg, ct)] = sum(n_cells.get((ct, g), 0)
+                                              for g in pgroups)
+            tables.append(build_table(genes, frac_pos, mean_expr, n_cells,
+                                      present, lfc_lut, args.min_cells,
+                                      segment=seg, contrasts=contrasts))
+            del adata
+        df = pd.concat(tables, ignore_index=True)
+        absent = [g for g in genes if g not in present_all]
+        if absent:
+            logging.warning('Genes not in either pipeline: %s', absent)
+        logging.info('panel cell counts: %s', panel_counts)
+        caption = ('dot size = % cells positive · FC cols colour = Wilcoxon '
+                   f'log2FC clipped [{args.vmin:g}, {args.vmax:g}] · baseline '
+                   'col colour = mean expr · only difference between halves = '
+                   'QC parameters (same marker typing) · † = gene absent '
+                   '(dropped by that pipeline’s gene filter)')
+        base = (f'CelltypeIteration_Dotplot_NeuronAstro_PipelineCompare_'
+                f'V1DEvs10X_Wilcoxon_{args.cmap}_{rng}_{len(genes)}gene-'
+                f'{args.date}')
+        df.to_csv(args.outdir / f'{base}.csv', index=False)
+        logging.info('Wrote %s.csv', base)
+        draw_combined(df, genes, panel_counts, norm, cmap, args.vmin, args.vmax,
+                      present_all, args.outdir / f'{base}.png',
+                      args.outdir / f'{base}.pdf',
+                      baseline_norm_from(df), base_cmap,
+                      panels=PIPELINE_PANELS, contrasts=contrasts,
+                      half_specs=HALF_SPECS_PIPE, caption=caption)
+        logging.info('Wrote %s.png | .pdf', base)
+        logging.info('Done (pipeline_compare). %d genes (%d absent).',
                      len(genes), len(absent))
         return
 

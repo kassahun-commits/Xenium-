@@ -548,6 +548,10 @@ def main():
                     help='optional: combined whole-cell + nucleus-only '
                          'Neuron/Astrocyte iteration dot plot PDF '
                          '(CelltypeIteration_Dotplot..._Combined...)')
+    ap.add_argument('--pipeline-dotplot-pdf', default=None,
+                    help='optional: V1-DE-vs-10X whole-cell pipeline-compare '
+                         'Neuron/Astrocyte dot plot PDF '
+                         '(CelltypeIteration_Dotplot..._PipelineCompare...)')
     ap.add_argument('--date', default='2026-06-09')
     args = ap.parse_args()
 
@@ -577,6 +581,12 @@ def main():
         combined_dot_png = assets / 'dotplot_combined.png'
         print('[fig] rendering combined iteration dot plot from PDF...')
         render_pdf_png(args.combined_dotplot_pdf, combined_dot_png, dpi=300)
+
+    pipeline_dot_png = None
+    if args.pipeline_dotplot_pdf and Path(args.pipeline_dotplot_pdf).exists():
+        pipeline_dot_png = assets / 'dotplot_pipeline_compare.png'
+        print('[fig] rendering V1-vs-10X pipeline-compare dot plot from PDF...')
+        render_pdf_png(args.pipeline_dotplot_pdf, pipeline_dot_png, dpi=300)
 
     nuc_sig_png = None
     if args.nuc_pb_csv and args.nuc_wx_csv:
@@ -991,6 +1001,28 @@ def main():
             'Dot SIZE = % cells positive. Leftmost "H2O_veh baseline" column: '
             'COLOUR = mean baseline expression (viridis). Four FC columns: '
             'COLOUR = Wilcoxon log2FC vs H2O_veh (red up / blue down, clipped ±1).',
+            size=10, color=AMBER, bold=True)
+
+    # ---- Slide 7e: same dot plot, V1 DE pipeline vs 10X workshop pipeline ----
+    if pipeline_dot_png is not None:
+        s = add_blank(prs)
+        slide_header(
+            s, prs, 'Same dot plot — V1 DE pipeline vs 10X workshop pipeline',
+            'Same 42 genes, same axes, both whole-cell & marker-gene typed · '
+            'the ONLY difference between halves is the QC parameters',
+            tag='Pipeline compare · QC effect', tag_color=AMBER)
+        from PIL import Image as _PILImage
+        _iw, _ih = _PILImage.open(str(pipeline_dot_png)).size
+        pic_h = 5.92
+        pic_w = pic_h * (_iw / _ih)
+        pic_left = (prs.slide_width / 914400 - pic_w) / 2.0
+        s.shapes.add_picture(str(pipeline_dot_png),
+                             Inches(pic_left), Inches(1.12),
+                             height=Inches(pic_h))
+        txt(s, 0.30, 7.06, 12.73, 0.38,
+            'Left = V1 DE QC (min_counts 10 · min_cells 5). Right = 10X workshop QC '
+            '(min_counts 20 · max 3405 · min_cells 100). Nucleus not shown — there is '
+            'no 10X nucleus pipeline. Two contrasts only (EtOH/con, chronic/con).',
             size=10, color=AMBER, bold=True)
 
     # ---- Slide 7b: does the cell-typing method change DE? (one per --compare) ----
