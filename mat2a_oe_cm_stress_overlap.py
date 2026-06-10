@@ -60,7 +60,8 @@ GROUP_LABEL = {'H2O_veh': 'H2O_veh\n(control)',
                'MAT2A_CM': 'MAT2A_CM',
                'MAT2A_OE': 'MAT2A_OE'}
 CELLTYPES = ['Neuron', 'Astrocyte']
-SRC_COLOR = {'OE only': '#2C7FB8', 'CM only': '#D95F0E', 'shared': '#444444'}
+SRC_COLOR = {'OE only': '#2C7FB8', 'CM only': '#D95F0E', 'shared': '#444444',
+             'forced': '#2CA02C'}
 
 
 def type_cells(adata):
@@ -129,9 +130,14 @@ def main():
     ap.add_argument('--padj-thresh', type=float, default=1e-3)
     ap.add_argument('--top-n', type=int, default=50,
                     help='top significant genes taken from EACH contrast')
+    ap.add_argument('--force-genes', default='',
+                    help='comma-separated genes ALWAYS added to the heatmap '
+                         'regardless of DE significance (e.g. construct tags '
+                         'GFP,Mat2a)')
     args = ap.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
     D, LFC, PADJ, N = args.date, args.lfc_thresh, args.padj_thresh, args.top_n
+    force_genes = [g.strip() for g in args.force_genes.split(',') if g.strip()]
     log = open(args.out_dir / f'{args.label}_overlap_log_{D}.txt', 'w')
 
     def say(*a):
@@ -197,12 +203,18 @@ def main():
         top_oe = top_sig(de['MAT2A_OE'], LFC, PADJ, N)
         top_cm = top_sig(de['MAT2A_CM'], LFC, PADJ, N)
         genes = list(dict.fromkeys(list(top_oe['gene']) + list(top_cm['gene'])))
-        if not genes:
-            say(f'[{ct}] no significant genes - skipping heatmap')
-            continue
         in_oe, in_cm = set(top_oe['gene']), set(top_cm['gene'])
         src = ['shared' if (g in in_oe and g in in_cm)
                else ('OE only' if g in in_oe else 'CM only') for g in genes]
+        # forced genes (e.g. construct tags) -> always shown regardless of DE
+        for fg in force_genes:
+            if fg in a.var_names and fg not in genes:
+                genes.append(fg); src.append('forced')
+            elif fg not in a.var_names:
+                say(f'[{ct}] forced gene {fg!r} absent from panel/after QC - skipped')
+        if not genes:
+            say(f'[{ct}] no significant or forced genes - skipping heatmap')
+            continue
 
         expr = group_mean_expr(a, genes)
         z = expr.sub(expr.mean(axis=1), axis=0).div(
@@ -252,8 +264,10 @@ def main():
                 cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
                 cb.set_label('row z-score', fontsize=8)
                 cb.ax.tick_params(labelsize=7)
+                present_src = set(src_o)
                 handles = [Patch(facecolor=SRC_COLOR[k], label=k)
-                           for k in ['OE only', 'CM only', 'shared']]
+                           for k in ['OE only', 'CM only', 'shared', 'forced']
+                           if k in present_src]
                 ax.legend(handles=handles, title='top-list source',
                           fontsize=7, title_fontsize=7.5,
                           loc='upper left', bbox_to_anchor=(1.25, 1.0),
